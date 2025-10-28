@@ -210,7 +210,7 @@ func TestIntegrationTransaction(t *testing.T) {
 
 	t.Run("Transaction", func(t *testing.T) {
 		// Create entity inside transaction to avoid contention with non-transactional operations
-		err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 			// Create new entity inside transaction
 			initial := &integrationEntity{
 				Name:      "counter",
@@ -225,7 +225,7 @@ func TestIntegrationTransaction(t *testing.T) {
 		}
 
 		// Now run another transaction to update it
-		err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 			var entity integrationEntity
 			if err := tx.Get(key, &entity); err != nil {
 				return err
@@ -358,4 +358,193 @@ type integrationEntity struct {
 	Name      string    `datastore:"name"`
 	Count     int64     `datastore:"count"`
 	Timestamp time.Time `datastore:"timestamp"`
+}
+
+// TestIntegrationGetAll tests the GetAll method with real GCP or mock.
+func TestIntegrationGetAll(t *testing.T) {
+	client, cleanup := integrationClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("GetAllWithMultipleEntities", func(t *testing.T) {
+		// Setup: Create test entities
+		kind := "DS9GetAllTest"
+		count := 5
+		keys := make([]*ds9.Key, count)
+		entities := make([]integrationEntity, count)
+
+		for i := range count {
+			keys[i] = ds9.IDKey(kind, int64(i+1000), nil) // Use IDs to avoid conflicts
+			entities[i] = integrationEntity{
+				Name:      "getall-entity-" + string(rune('A'+i)),
+				Count:     int64(i * 100),
+				Timestamp: time.Now().UTC().Truncate(time.Microsecond),
+			}
+		}
+
+		// Put entities
+		_, err := client.PutMulti(ctx, keys, entities)
+		if err != nil {
+			t.Fatalf("PutMulti failed: %v", err)
+		}
+
+		// Test GetAll
+		query := ds9.NewQuery(kind)
+		var results []integrationEntity
+		returnedKeys, err := client.GetAll(ctx, query, &results)
+		if err != nil {
+			t.Fatalf("GetAll failed: %v", err)
+		}
+
+		if len(results) < count {
+			t.Errorf("Expected at least %d entities, got %d", count, len(results))
+		}
+
+		if len(returnedKeys) < count {
+			t.Errorf("Expected at least %d keys, got %d", count, len(returnedKeys))
+		}
+
+		// Verify we got the entities we created
+		foundCount := 0
+		for _, entity := range results {
+			if entity.Name >= "getall-entity-A" && entity.Name <= "getall-entity-E" {
+				foundCount++
+			}
+		}
+
+		if foundCount < count {
+			t.Errorf("Expected to find at least %d of our entities, found %d", count, foundCount)
+		}
+
+		// Cleanup
+		err = client.DeleteMulti(ctx, keys)
+		if err != nil {
+			t.Logf("Warning: cleanup failed: %v", err)
+		}
+	})
+
+	t.Run("GetAllWithLimit", func(t *testing.T) {
+		kind := "DS9GetAllLimitTest"
+		// Create 10 entities
+		keys := make([]*ds9.Key, 10)
+		entities := make([]integrationEntity, 10)
+
+		for i := range 10 {
+			keys[i] = ds9.IDKey(kind, int64(i+2000), nil)
+			entities[i] = integrationEntity{
+				Name:      "limit-test-" + string(rune('0'+i)),
+				Count:     int64(i),
+				Timestamp: time.Now().UTC().Truncate(time.Microsecond),
+			}
+		}
+
+		_, err := client.PutMulti(ctx, keys, entities)
+		if err != nil {
+			t.Fatalf("PutMulti failed: %v", err)
+		}
+
+		// Test GetAll with limit
+		query := ds9.NewQuery(kind).Limit(3)
+		var results []integrationEntity
+		returnedKeys, err := client.GetAll(ctx, query, &results)
+		if err != nil {
+			t.Fatalf("GetAll with limit failed: %v", err)
+		}
+
+		// Should get at most 3 results
+		if len(results) > 3 {
+			t.Errorf("Expected at most 3 entities with limit, got %d", len(results))
+		}
+
+		if len(returnedKeys) > 3 {
+			t.Errorf("Expected at most 3 keys with limit, got %d", len(returnedKeys))
+		}
+
+		// Cleanup
+		err = client.DeleteMulti(ctx, keys)
+		if err != nil {
+			t.Logf("Warning: cleanup failed: %v", err)
+		}
+	})
+
+	t.Run("GetAllEmpty", func(t *testing.T) {
+		kind := "DS9NonExistentKind"
+		query := ds9.NewQuery(kind)
+		var results []integrationEntity
+
+		keys, err := client.GetAll(ctx, query, &results)
+		if err != nil {
+			t.Fatalf("GetAll on empty kind failed: %v", err)
+		}
+
+		if len(results) != 0 {
+			t.Errorf("Expected 0 entities, got %d", len(results))
+		}
+
+		if len(keys) != 0 {
+			t.Errorf("Expected 0 keys, got %d", len(keys))
+		}
+	})
+}
+
+// TestIntegrationClose tests the Close method.
+func TestIntegrationClose(t *testing.T) {
+	client, cleanup := integrationClient(t)
+	defer cleanup()
+
+	// Close should not error
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Close() returned unexpected error: %v", err)
+	}
+
+	// Should be idempotent
+	err = client.Close()
+	if err != nil {
+		t.Errorf("Second Close() returned unexpected error: %v", err)
+	}
+}
+
+// TestIntegrationCommitReturn tests that RunInTransaction returns a Commit.
+func TestIntegrationCommitReturn(t *testing.T) {
+	client, cleanup := integrationClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	key := ds9.IDKey("DS9CommitTest", 9999, nil)
+
+	commit, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		entity := &integrationEntity{
+			Name:      "commit-test",
+			Count:     42,
+			Timestamp: time.Now().UTC().Truncate(time.Microsecond),
+		}
+		_, err := tx.Put(key, entity)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("RunInTransaction failed: %v", err)
+	}
+
+	if commit == nil {
+		t.Fatal("Expected non-nil Commit, got nil")
+	}
+
+	// Verify entity was created
+	var retrieved integrationEntity
+	err = client.Get(ctx, key, &retrieved)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+
+	if retrieved.Name != "commit-test" {
+		t.Errorf("Expected name 'commit-test', got '%s'", retrieved.Name)
+	}
+
+	// Cleanup
+	err = client.Delete(ctx, key)
+	if err != nil {
+		t.Logf("Warning: cleanup failed: %v", err)
+	}
 }

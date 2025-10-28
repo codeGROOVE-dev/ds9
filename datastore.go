@@ -16,9 +16,11 @@ import (
 	"math"
 	"math/rand/v2"
 	"net/http"
+	neturl "net/url"
 	"reflect"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/codeGROOVE-dev/ds9/auth"
@@ -53,12 +55,15 @@ var (
 // SetTestURLs configures custom metadata and API URLs for testing.
 // This is intended for use by testing packages like ds9mock.
 // Returns a function that restores the original URLs.
+// WARNING: This function should only be called in test code.
+// Set DS9_ALLOW_TEST_OVERRIDES=true to enable in non-test environments.
 //
 // Example:
 //
 //	restore := ds9.SetTestURLs("http://localhost:8080", "http://localhost:9090")
 //	defer restore()
 func SetTestURLs(metadata, api string) (restore func()) {
+	// Auth package will log warning if called outside test environment
 	oldAPI := apiURL
 	apiURL = api
 	restoreAuth := auth.SetMetadataURL(metadata)
@@ -86,17 +91,23 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 	logger := slog.Default()
 
 	if projID == "" {
-		logger.InfoContext(ctx, "project ID not provided, fetching from metadata server")
+		if !testing.Testing() {
+			logger.InfoContext(ctx, "project ID not provided, fetching from metadata server")
+		}
 		pid, err := auth.ProjectID(ctx)
 		if err != nil {
 			logger.ErrorContext(ctx, "failed to get project ID from metadata server", "error", err)
 			return nil, fmt.Errorf("project ID required: %w", err)
 		}
 		projID = pid
-		logger.InfoContext(ctx, "fetched project ID from metadata server", "project_id", projID)
+		if !testing.Testing() {
+			logger.InfoContext(ctx, "fetched project ID from metadata server", "project_id", projID)
+		}
 	}
 
-	logger.InfoContext(ctx, "creating datastore client", "project_id", projID, "database_id", dbID)
+	if !testing.Testing() {
+		logger.InfoContext(ctx, "creating datastore client", "project_id", projID, "database_id", dbID)
+	}
 
 	return &Client{
 		projectID:  projID,
@@ -105,9 +116,11 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 	}, nil
 }
 
-// accessToken retrieves an access token using the auth package.
-func accessToken(ctx context.Context) (string, error) {
-	return auth.AccessToken(ctx)
+// Close closes the client connection.
+// This is a no-op for ds9 since it uses a shared HTTP client with connection pooling,
+// but is provided for API compatibility with cloud.google.com/go/datastore.
+func (*Client) Close() error {
+	return nil
 }
 
 // Key represents a Datastore key.
@@ -177,7 +190,8 @@ func doRequest(ctx context.Context, logger *slog.Logger, url string, jsonData []
 
 		// Add routing header for named databases
 		if databaseID != "" {
-			routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", projectID, databaseID)
+			// URL-encode values to prevent header injection attacks
+			routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", neturl.QueryEscape(projectID), neturl.QueryEscape(databaseID))
 			req.Header.Set("X-Goog-Request-Params", routingHeader)
 		}
 
@@ -258,7 +272,7 @@ func (c *Client) Get(ctx context.Context, key *Key, dst any) error {
 
 	c.logger.DebugContext(ctx, "getting entity", "kind", key.Kind, "name", key.Name, "id", key.ID)
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return fmt.Errorf("failed to get access token: %w", err)
@@ -277,8 +291,9 @@ func (c *Client) Get(ctx context.Context, key *Key, dst any) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:lookup", apiURL, c.projectID)
-	body, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID)
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:lookup", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "lookup request failed", "error", err, "kind", key.Kind)
 		return err
@@ -315,7 +330,7 @@ func (c *Client) Put(ctx context.Context, key *Key, src any) (*Key, error) {
 
 	c.logger.DebugContext(ctx, "putting entity", "kind", key.Kind, "name", key.Name, "id", key.ID)
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return nil, fmt.Errorf("failed to get access token: %w", err)
@@ -341,8 +356,9 @@ func (c *Client) Put(ctx context.Context, key *Key, src any) (*Key, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:commit", apiURL, c.projectID)
-	if _, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID); err != nil {
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "commit request failed", "error", err, "kind", key.Kind)
 		return nil, err
 	}
@@ -360,7 +376,7 @@ func (c *Client) Delete(ctx context.Context, key *Key) error {
 
 	c.logger.DebugContext(ctx, "deleting entity", "kind", key.Kind, "name", key.Name, "id", key.ID)
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return fmt.Errorf("failed to get access token: %w", err)
@@ -380,8 +396,9 @@ func (c *Client) Delete(ctx context.Context, key *Key) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:commit", apiURL, c.projectID)
-	if _, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID); err != nil {
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "delete request failed", "error", err, "kind", key.Kind)
 		return err
 	}
@@ -402,7 +419,7 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 
 	c.logger.DebugContext(ctx, "getting multiple entities", "count", len(keys))
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return fmt.Errorf("failed to get access token: %w", err)
@@ -431,8 +448,9 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:lookup", apiURL, c.projectID)
-	body, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID)
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:lookup", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "lookup request failed", "error", err)
 		return err
@@ -508,7 +526,7 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 		return nil, fmt.Errorf("keys and src length mismatch: %d != %d", len(keys), v.Len())
 	}
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return nil, fmt.Errorf("failed to get access token: %w", err)
@@ -547,8 +565,9 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:commit", apiURL, c.projectID)
-	if _, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID); err != nil {
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "commit request failed", "error", err)
 		return nil, err
 	}
@@ -567,7 +586,7 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 
 	c.logger.DebugContext(ctx, "deleting multiple entities", "count", len(keys))
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return fmt.Errorf("failed to get access token: %w", err)
@@ -600,8 +619,9 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:commit", apiURL, c.projectID)
-	if _, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID); err != nil {
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "delete request failed", "error", err)
 		return err
 	}
@@ -918,7 +938,7 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 
 	c.logger.DebugContext(ctx, "querying for keys", "kind", q.kind, "limit", q.limit)
 
-	token, err := accessToken(ctx)
+	token, err := auth.AccessToken(ctx)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
 		return nil, fmt.Errorf("failed to get access token: %w", err)
@@ -943,8 +963,9 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, c.projectID)
-	body, err := doRequest(ctx, c.logger, url, jsonData, token, c.projectID, c.databaseID)
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "query request failed", "error", err, "kind", q.kind)
 		return nil, err
@@ -974,6 +995,94 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 	}
 
 	c.logger.DebugContext(ctx, "query completed successfully", "kind", q.kind, "keys_found", len(keys))
+	return keys, nil
+}
+
+// GetAll retrieves all entities matching the query and stores them in dst.
+// dst must be a pointer to a slice of structs.
+// Returns the keys of the retrieved entities and any error.
+// This matches the API of cloud.google.com/go/datastore.
+func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, error) {
+	c.logger.DebugContext(ctx, "querying for entities", "kind", query.kind, "limit", query.limit)
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	queryObj := map[string]any{
+		"kind": []map[string]any{{"name": query.kind}},
+	}
+	if query.limit > 0 {
+		queryObj["limit"] = query.limit
+	}
+
+	reqBody := map[string]any{"query": queryObj}
+	if c.databaseID != "" {
+		reqBody["databaseId"] = c.databaseID
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "query request failed", "error", err, "kind", query.kind)
+		return nil, err
+	}
+
+	var result struct {
+		Batch struct {
+			EntityResults []struct {
+				Entity map[string]any `json:"entity"`
+			} `json:"entityResults"`
+		} `json:"batch"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Verify dst is a pointer to slice
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
+		return nil, errors.New("dst must be a pointer to slice")
+	}
+
+	sliceType := v.Elem().Type()
+	elemType := sliceType.Elem()
+
+	// Create new slice of correct size
+	slice := reflect.MakeSlice(sliceType, 0, len(result.Batch.EntityResults))
+	keys := make([]*Key, 0, len(result.Batch.EntityResults))
+
+	for _, er := range result.Batch.EntityResults {
+		// Extract key
+		key, err := keyFromJSON(er.Entity["key"])
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to parse key from response", "error", err)
+			return nil, err
+		}
+		keys = append(keys, key)
+
+		// Decode entity
+		elem := reflect.New(elemType).Elem()
+		if err := decodeEntity(er.Entity, elem.Addr().Interface()); err != nil {
+			c.logger.ErrorContext(ctx, "failed to decode entity", "error", err)
+			return nil, err
+		}
+		slice = reflect.Append(slice, elem)
+	}
+
+	v.Elem().Set(slice)
+	c.logger.DebugContext(ctx, "query completed successfully", "kind", query.kind, "entities_found", len(keys))
 	return keys, nil
 }
 
@@ -1017,6 +1126,10 @@ func keyFromJSON(keyData any) (*Key, error) {
 	return key, nil
 }
 
+// Commit represents the result of a committed transaction.
+// This is provided for API compatibility with cloud.google.com/go/datastore.
+type Commit struct{}
+
 // Transaction represents a Datastore transaction.
 // Note: This struct stores context for API compatibility with Google's official
 // cloud.google.com/go/datastore library, which uses the same pattern.
@@ -1030,14 +1143,14 @@ type Transaction struct {
 // RunInTransaction runs a function in a transaction.
 // The function should use the transaction's Get and Put methods.
 // API compatible with cloud.google.com/go/datastore.
-func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error) error {
+func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error) (*Commit, error) {
 	const maxTxRetries = 3
 	var lastErr error
 
 	for attempt := range maxTxRetries {
-		token, err := accessToken(ctx)
+		token, err := auth.AccessToken(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get access token: %w", err)
+			return nil, fmt.Errorf("failed to get access token: %w", err)
 		}
 
 		// Begin transaction
@@ -1048,13 +1161,14 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		url := fmt.Sprintf("%s/projects/%s:beginTransaction", apiURL, c.projectID)
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+		// URL-encode project ID to prevent injection attacks
+		reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", apiURL, neturl.PathEscape(c.projectID))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -1062,13 +1176,14 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 
 		// Add routing header for named databases
 		if c.databaseID != "" {
-			routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", c.projectID, c.databaseID)
+			// URL-encode values to prevent header injection attacks
+			routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", neturl.QueryEscape(c.projectID), neturl.QueryEscape(c.databaseID))
 			req.Header.Set("X-Goog-Request-Params", routingHeader)
 		}
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
@@ -1077,11 +1192,11 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 			c.logger.Warn("failed to close response body", "error", closeErr)
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("begin transaction failed with status %d: %s", resp.StatusCode, string(body))
+			return nil, fmt.Errorf("begin transaction failed with status %d: %s", resp.StatusCode, string(body))
 		}
 
 		var txResp struct {
@@ -1089,7 +1204,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		}
 
 		if err := json.Unmarshal(body, &txResp); err != nil {
-			return fmt.Errorf("failed to parse transaction response: %w", err)
+			return nil, fmt.Errorf("failed to parse transaction response: %w", err)
 		}
 
 		tx := &Transaction{
@@ -1101,14 +1216,14 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		// Run the function
 		if err := f(tx); err != nil {
 			// Rollback is implicit if commit is not called
-			return err
+			return nil, err
 		}
 
 		// Commit the transaction
 		err = tx.commit(ctx, token)
 		if err == nil {
 			c.logger.Debug("transaction committed successfully", "attempt", attempt+1)
-			return nil // Success
+			return &Commit{}, nil // Success
 		}
 
 		c.logger.Warn("transaction commit failed", "attempt", attempt+1, "error", err)
@@ -1138,10 +1253,10 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 
 		// Non-retriable error
 		c.logger.Warn("non-retriable transaction error", "error", err)
-		return err
+		return nil, err
 	}
 
-	return fmt.Errorf("transaction failed after %d attempts: %w", maxTxRetries, lastErr)
+	return nil, fmt.Errorf("transaction failed after %d attempts: %w", maxTxRetries, lastErr)
 }
 
 // Get retrieves an entity within the transaction.
@@ -1151,7 +1266,7 @@ func (tx *Transaction) Get(key *Key, dst any) error {
 		return errors.New("key cannot be nil")
 	}
 
-	token, err := accessToken(tx.ctx)
+	token, err := auth.AccessToken(tx.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
@@ -1174,8 +1289,9 @@ func (tx *Transaction) Get(key *Key, dst any) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:lookup", apiURL, tx.client.projectID)
-	req, err := http.NewRequestWithContext(tx.ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:lookup", apiURL, neturl.PathEscape(tx.client.projectID))
+	req, err := http.NewRequestWithContext(tx.ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
 	}
@@ -1185,7 +1301,10 @@ func (tx *Transaction) Get(key *Key, dst any) error {
 
 	// Add routing header for named databases
 	if tx.client.databaseID != "" {
-		routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", tx.client.projectID, tx.client.databaseID)
+		// URL-encode values to prevent header injection attacks
+		routingHeader := fmt.Sprintf("project_id=%s&database_id=%s",
+			neturl.QueryEscape(tx.client.projectID),
+			neturl.QueryEscape(tx.client.databaseID))
 		req.Header.Set("X-Goog-Request-Params", routingHeader)
 	}
 
@@ -1266,8 +1385,9 @@ func (tx *Transaction) commit(ctx context.Context, token string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("%s/projects/%s:commit", apiURL, tx.client.projectID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(tx.client.projectID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
 	}
@@ -1277,7 +1397,10 @@ func (tx *Transaction) commit(ctx context.Context, token string) error {
 
 	// Add routing header for named databases
 	if tx.client.databaseID != "" {
-		routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", tx.client.projectID, tx.client.databaseID)
+		// URL-encode values to prevent header injection attacks
+		routingHeader := fmt.Sprintf("project_id=%s&database_id=%s",
+			neturl.QueryEscape(tx.client.projectID),
+			neturl.QueryEscape(tx.client.databaseID))
 		req.Header.Set("X-Goog-Request-Params", routingHeader)
 	}
 
