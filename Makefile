@@ -15,7 +15,7 @@ integration:
 	@echo ""
 	@echo "==> Checking if test database exists..."
 	@if gcloud firestore databases describe --database=$(DS9_TEST_DATABASE) --project=$(DS9_TEST_PROJECT) >/dev/null 2>&1; then \
-		echo "    Database already exists, skipping creation"; \
+		echo "    Database already exists, using existing database"; \
 	else \
 		echo "    Database does not exist, creating..."; \
 		if ! gcloud firestore databases create --database=$(DS9_TEST_DATABASE) \
@@ -31,17 +31,21 @@ integration:
 			exit 1; \
 		fi; \
 		echo "    Database created successfully"; \
+		echo "    Waiting 10 seconds for database to propagate..."; \
+		sleep 10; \
 	fi
 	@echo ""
 	@echo "==> Running integration tests..."
-	@DS9_TEST_PROJECT=$(DS9_TEST_PROJECT) go test -v -race -tags=integration -timeout=5m ./... || \
-		(echo ""; echo "==> Tests failed, cleaning up..."; \
-		 gcloud firestore databases delete --database=$(DS9_TEST_DATABASE) --project=$(DS9_TEST_PROJECT) --quiet 2>/dev/null; \
-		 exit 1)
+	@DS9_TEST_PROJECT=$(DS9_TEST_PROJECT) go test -v -race -timeout=5m ./...
 	@echo ""
-	@echo "==> Cleaning up test database..."
-	@gcloud firestore databases delete --database=$(DS9_TEST_DATABASE) --project=$(DS9_TEST_PROJECT) --quiet
 	@echo "==> Integration tests complete!"
+	@echo "Note: Database $(DS9_TEST_DATABASE) is retained for reuse"
+	@echo "      Run 'make clean-integration-db' to delete it"
+
+clean-integration-db:
+	@echo "==> Deleting integration test database..."
+	@gcloud firestore databases delete --database=$(DS9_TEST_DATABASE) --project=$(DS9_TEST_PROJECT) --quiet
+	@echo "==> Database deleted successfully"
 
 lint:
 	go vet ./...
