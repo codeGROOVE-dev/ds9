@@ -226,7 +226,7 @@ func TestMockTransaction(t *testing.T) {
 	}
 
 	// Run transaction
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var current TestEntity
 		if err := tx.Get(key, &current); err != nil {
 			return err

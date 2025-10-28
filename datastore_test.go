@@ -268,7 +268,7 @@ func TestRunInTransaction(t *testing.T) {
 	}
 
 	// Run transaction to read and update
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var current testEntity
 		if err := tx.Get(key, &current); err != nil {
 			return err
@@ -302,7 +302,7 @@ func TestTransactionNotFound(t *testing.T) {
 
 	key := ds9.NameKey("TestKind", "nonexistent", nil)
 
-	err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -804,7 +804,7 @@ func TestTransactionMultipleOperations(t *testing.T) {
 	}
 
 	// Run transaction that reads and updates multiple entities
-	err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		for i := range 3 {
 			key := ds9.NameKey("TestKind", string(rune('a'+i)), nil)
 			var current testEntity
@@ -1322,7 +1322,7 @@ func TestTransactionWithError(t *testing.T) {
 	}
 
 	// Run transaction that errors
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var current testEntity
 		if err := tx.Get(key, &current); err != nil {
 			return err
@@ -1442,7 +1442,7 @@ func TestTransactionWithDatabaseID(t *testing.T) {
 	}
 
 	// Run transaction with databaseID
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		key := ds9.NameKey("TestKind", "tx-test", nil)
 		entity := testEntity{Name: "in-tx", Count: 42}
 		_, err := tx.Put(key, &entity)
@@ -2060,7 +2060,7 @@ func TestTransactionRollback(t *testing.T) {
 	}
 
 	// Run transaction that will fail
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var current testEntity
 		if err := tx.Get(key, &current); err != nil {
 			return err
@@ -2183,7 +2183,7 @@ func TestTransactionBeginFailure(t *testing.T) {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		return nil
 	})
 
@@ -2284,7 +2284,7 @@ func TestTransactionCommitAbortedRetry(t *testing.T) {
 
 	// This should succeed after retries
 	key := ds9.NameKey("TestKind", "tx-retry", nil)
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		_, err := tx.Put(key, &testEntity{Name: "test", Count: 1})
 		return err
 	})
@@ -2374,7 +2374,7 @@ func TestTransactionMaxRetriesExceeded(t *testing.T) {
 
 	// This should fail after max retries
 	key := ds9.NameKey("TestKind", "tx-max-retry", nil)
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		_, err := tx.Put(key, &testEntity{Name: "test", Count: 1})
 		return err
 	})
@@ -2881,7 +2881,7 @@ func TestTransactionGetNonExistent(t *testing.T) {
 
 	key := ds9.NameKey("TestKind", "nonexistent", nil)
 
-	err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -3087,7 +3087,7 @@ func TestTransactionPutWithNilKey(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		entity := &testEntity{Name: "test", Count: 1}
 		_, err := tx.Put(nil, entity)
 		return err
@@ -3104,7 +3104,7 @@ func TestTransactionGetWithNilKey(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		return tx.Get(nil, &entity)
 	})
@@ -3268,7 +3268,7 @@ func TestTransactionWithMultiplePuts(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		for i := range 5 {
 			key := ds9.NameKey("TxMulti", fmt.Sprintf("key-%d", i), nil)
 			entity := &testEntity{Name: "test", Count: int64(i)}
@@ -3565,7 +3565,7 @@ func TestTransactionGetWithInvalidResponse(t *testing.T) {
 	}
 
 	key := ds9.NameKey("Test", "key", nil)
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -4060,7 +4060,7 @@ func TestTransactionWithNonRetriableError(t *testing.T) {
 	}
 
 	key := ds9.NameKey("Test", "key", nil)
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		_, err := tx.Put(key, &testEntity{Name: "test", Count: 1})
 		return err
 	})
@@ -4125,7 +4125,7 @@ func TestTransactionWithInvalidTxResponse(t *testing.T) {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		return nil
 	})
 
@@ -4228,7 +4228,7 @@ func TestTransactionGetWithDecodeError(t *testing.T) {
 	}
 
 	key := ds9.NameKey("Test", "key", nil)
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -4677,7 +4677,7 @@ func TestTransactionGetMissingEntity(t *testing.T) {
 	ctx := context.Background()
 	key := ds9.NameKey("Test", "nonexistent", nil)
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		err := tx.Get(key, &entity)
 		if err == nil {
@@ -4766,7 +4766,7 @@ func TestTransactionGetDecodeError(t *testing.T) {
 	ctx := context.Background()
 	key := ds9.NameKey("Test", "key", nil)
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		err := tx.Get(key, &entity)
 		if err == nil {
@@ -5154,7 +5154,7 @@ func TestTransactionCommitInvalidResponse(t *testing.T) {
 	key := ds9.NameKey("Test", "key", nil)
 	entity := &testEntity{Name: "test"}
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		_, err := tx.Put(key, entity)
 		return err
 	})
@@ -6028,7 +6028,7 @@ func TestTransactionCommitUnmarshalError(t *testing.T) {
 	key := ds9.NameKey("Test", "key", nil)
 	entity := &testEntity{Name: "test"}
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		_, err := tx.Put(key, entity)
 		return err
 	})
@@ -6558,7 +6558,7 @@ func TestTransactionGetNotFound(t *testing.T) {
 	ctx := context.Background()
 	key := ds9.NameKey("Test", "nonexistent", nil)
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		err := tx.Get(key, &entity)
 		if err == nil {
@@ -6619,7 +6619,7 @@ func TestTransactionGetAccessTokenError(t *testing.T) {
 	ctx := context.Background()
 	key := ds9.NameKey("Test", "test-key", nil)
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		err := tx.Get(key, &entity)
 		if err == nil {
@@ -6703,7 +6703,7 @@ func TestTransactionGetNonOKStatus(t *testing.T) {
 	ctx := context.Background()
 	key := ds9.NameKey("Test", "test-key", nil)
 
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -6848,5 +6848,419 @@ func TestDeleteMultiMixedResults(t *testing.T) {
 	// May or may not error depending on implementation
 	if err != nil {
 		t.Logf("DeleteMulti with mismatched results: %v", err)
+	}
+}
+
+// TestBackwardsCompatibility tests the API compatibility with cloud.google.com/go/datastore.
+// This ensures that ds9 can be used as a drop-in replacement.
+func TestBackwardsCompatibility(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test 1: Close() method exists and can be called (even though it's a no-op)
+	t.Run("Close", func(t *testing.T) {
+		err := client.Close()
+		if err != nil {
+			t.Errorf("Close() returned error: %v", err)
+		}
+	})
+
+	// Test 2: RunInTransaction returns (*Commit, error)
+	t.Run("RunInTransactionSignature", func(t *testing.T) {
+		key := ds9.NameKey("TestKind", "test-tx-compat", nil)
+
+		commit, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+			entity := &testEntity{
+				Name:      "transaction test",
+				Count:     100,
+				Active:    true,
+				Score:     99.9,
+				UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
+			}
+			_, err := tx.Put(key, entity)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("RunInTransaction failed: %v", err)
+		}
+
+		if commit == nil {
+			t.Error("Expected non-nil Commit, got nil")
+		}
+	})
+
+	// Test 3: GetAll() method retrieves entities and returns keys
+	t.Run("GetAll", func(t *testing.T) {
+		// Setup: Create some test entities
+		entities := []testEntity{
+			{Name: "entity1", Count: 1, Active: true, Score: 1.1, UpdatedAt: time.Now().UTC().Truncate(time.Microsecond)},
+			{Name: "entity2", Count: 2, Active: false, Score: 2.2, UpdatedAt: time.Now().UTC().Truncate(time.Microsecond)},
+			{Name: "entity3", Count: 3, Active: true, Score: 3.3, UpdatedAt: time.Now().UTC().Truncate(time.Microsecond)},
+		}
+
+		keys := []*ds9.Key{
+			ds9.NameKey("GetAllTest", "key1", nil),
+			ds9.NameKey("GetAllTest", "key2", nil),
+			ds9.NameKey("GetAllTest", "key3", nil),
+		}
+
+		_, err := client.PutMulti(ctx, keys, entities)
+		if err != nil {
+			t.Fatalf("PutMulti failed: %v", err)
+		}
+
+		// Test GetAll
+		query := ds9.NewQuery("GetAllTest")
+		var results []testEntity
+		returnedKeys, err := client.GetAll(ctx, query, &results)
+		if err != nil {
+			t.Fatalf("GetAll failed: %v", err)
+		}
+
+		if len(results) != 3 {
+			t.Errorf("Expected 3 entities, got %d", len(results))
+		}
+
+		if len(returnedKeys) != 3 {
+			t.Errorf("Expected 3 keys, got %d", len(returnedKeys))
+		}
+
+		// Verify entities were properly decoded
+		foundNames := make(map[string]bool)
+		for _, entity := range results {
+			foundNames[entity.Name] = true
+		}
+
+		for _, expectedName := range []string{"entity1", "entity2", "entity3"} {
+			if !foundNames[expectedName] {
+				t.Errorf("Expected to find entity %s, but didn't", expectedName)
+			}
+		}
+
+		// Verify keys match entities
+		for i, key := range returnedKeys {
+			if key.Kind != "GetAllTest" {
+				t.Errorf("Key %d has wrong kind: %s", i, key.Kind)
+			}
+		}
+	})
+
+	// Test 4: GetAll with limit
+	t.Run("GetAllWithLimit", func(t *testing.T) {
+		query := ds9.NewQuery("GetAllTest").Limit(2)
+		var results []testEntity
+		returnedKeys, err := client.GetAll(ctx, query, &results)
+		if err != nil {
+			t.Fatalf("GetAll with limit failed: %v", err)
+		}
+
+		if len(results) != 2 {
+			t.Errorf("Expected 2 entities with limit, got %d", len(results))
+		}
+
+		if len(returnedKeys) != 2 {
+			t.Errorf("Expected 2 keys with limit, got %d", len(returnedKeys))
+		}
+	})
+}
+
+// TestClose tests that the Close() method exists and returns no error.
+func TestClose(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	err := client.Close()
+	if err != nil {
+		t.Errorf("Close() returned unexpected error: %v", err)
+	}
+
+	// Should be idempotent - can call multiple times
+	err = client.Close()
+	if err != nil {
+		t.Errorf("Second Close() returned unexpected error: %v", err)
+	}
+}
+
+// TestGetAllEmpty tests GetAll with no results.
+func TestGetAllEmpty(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	query := ds9.NewQuery("NonExistentKind")
+	var results []testEntity
+
+	keys, err := client.GetAll(ctx, query, &results)
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("Expected 0 entities, got %d", len(results))
+	}
+
+	if len(keys) != 0 {
+		t.Errorf("Expected 0 keys, got %d", len(keys))
+	}
+}
+
+// TestGetAllInvalidDst tests GetAll with invalid destination.
+func TestGetAllInvalidDst(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	query := ds9.NewQuery("TestKind")
+
+	tests := []struct {
+		name string
+		dst  any
+	}{
+		{"not a pointer", []testEntity{}},
+		{"not a slice", new(testEntity)},
+		{"nil", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.GetAll(ctx, query, tt.dst)
+			if err == nil {
+				t.Error("Expected error for invalid dst, got nil")
+			}
+		})
+	}
+}
+
+// TestGetAllSingleEntity tests GetAll retrieving a single entity.
+func TestGetAllSingleEntity(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create entity
+	key := ds9.NameKey("SingleGetAll", "single1", nil)
+	entity := testEntity{
+		Name:      "single",
+		Count:     42,
+		Active:    true,
+		Score:     3.14,
+		UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		Notes:     "test notes",
+	}
+
+	_, err := client.Put(ctx, key, &entity)
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Test GetAll
+	query := ds9.NewQuery("SingleGetAll")
+	var results []testEntity
+	keys, err := client.GetAll(ctx, query, &results)
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 entity, got %d", len(results))
+	}
+
+	if len(keys) != 1 {
+		t.Fatalf("Expected 1 key, got %d", len(keys))
+	}
+
+	// Verify entity content
+	if results[0].Name != "single" {
+		t.Errorf("Expected name 'single', got '%s'", results[0].Name)
+	}
+	if results[0].Count != 42 {
+		t.Errorf("Expected count 42, got %d", results[0].Count)
+	}
+	if !results[0].Active {
+		t.Error("Expected active=true")
+	}
+	if results[0].Score != 3.14 {
+		t.Errorf("Expected score 3.14, got %f", results[0].Score)
+	}
+
+	// Verify key
+	if keys[0].Kind != "SingleGetAll" {
+		t.Errorf("Expected kind 'SingleGetAll', got '%s'", keys[0].Kind)
+	}
+	if keys[0].Name != "single1" {
+		t.Errorf("Expected key name 'single1', got '%s'", keys[0].Name)
+	}
+}
+
+// TestGetAllMultipleEntities tests GetAll retrieving multiple entities.
+func TestGetAllMultipleEntities(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create multiple entities
+	count := 5
+	keys := make([]*ds9.Key, count)
+	entities := make([]testEntity, count)
+
+	for i := range count {
+		keys[i] = ds9.NameKey("MultiGetAll", fmt.Sprintf("entity%d", i), nil)
+		entities[i] = testEntity{
+			Name:      fmt.Sprintf("entity%d", i),
+			Count:     int64(i * 10),
+			Active:    i%2 == 0,
+			Score:     float64(i) * 1.5,
+			UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
+	}
+
+	_, err := client.PutMulti(ctx, keys, entities)
+	if err != nil {
+		t.Fatalf("PutMulti failed: %v", err)
+	}
+
+	// Test GetAll
+	query := ds9.NewQuery("MultiGetAll")
+	var results []testEntity
+	returnedKeys, err := client.GetAll(ctx, query, &results)
+	if err != nil {
+		t.Fatalf("GetAll failed: %v", err)
+	}
+
+	if len(results) != count {
+		t.Fatalf("Expected %d entities, got %d", count, len(results))
+	}
+
+	if len(returnedKeys) != count {
+		t.Fatalf("Expected %d keys, got %d", count, len(returnedKeys))
+	}
+
+	// Verify we got all entities
+	foundNames := make(map[string]bool)
+	for _, entity := range results {
+		foundNames[entity.Name] = true
+	}
+
+	for i := range count {
+		expectedName := fmt.Sprintf("entity%d", i)
+		if !foundNames[expectedName] {
+			t.Errorf("Missing entity: %s", expectedName)
+		}
+	}
+}
+
+// TestGetAllWithLimitVariations tests GetAll with various limit values.
+func TestGetAllWithLimitVariations(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Setup: Create 10 entities
+	keys := make([]*ds9.Key, 10)
+	entities := make([]testEntity, 10)
+	for i := range 10 {
+		keys[i] = ds9.NameKey("LimitGetAll", fmt.Sprintf("key%d", i), nil)
+		entities[i] = testEntity{
+			Name:      fmt.Sprintf("entity%d", i),
+			Count:     int64(i),
+			Active:    true,
+			UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
+	}
+
+	_, err := client.PutMulti(ctx, keys, entities)
+	if err != nil {
+		t.Fatalf("PutMulti failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		limit    int
+		expected int
+	}{
+		{"Limit 1", 1, 1},
+		{"Limit 3", 3, 3},
+		{"Limit 5", 5, 5},
+		{"Limit 10", 10, 10},
+		{"Limit 20 (more than available)", 20, 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := ds9.NewQuery("LimitGetAll").Limit(tt.limit)
+			var results []testEntity
+			keys, err := client.GetAll(ctx, query, &results)
+			if err != nil {
+				t.Fatalf("GetAll failed: %v", err)
+			}
+
+			if len(results) != tt.expected {
+				t.Errorf("Expected %d entities, got %d", tt.expected, len(results))
+			}
+
+			if len(keys) != tt.expected {
+				t.Errorf("Expected %d keys, got %d", tt.expected, len(keys))
+			}
+		})
+	}
+}
+
+// TestRunInTransactionReturnsCommit tests that RunInTransaction returns a Commit object.
+func TestRunInTransactionReturnsCommit(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	key := ds9.NameKey("CommitTest", "test1", nil)
+
+	commit, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		entity := &testEntity{
+			Name:      "commit test",
+			Count:     1,
+			Active:    true,
+			UpdatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
+		_, err := tx.Put(key, entity)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("RunInTransaction failed: %v", err)
+	}
+
+	if commit == nil {
+		t.Fatal("Expected non-nil Commit, got nil")
+	}
+
+	// Commit should be a valid *Commit type
+	_ = commit
+}
+
+// TestRunInTransactionErrorReturnsNilCommit tests that RunInTransaction returns nil Commit on error.
+func TestRunInTransactionErrorReturnsNilCommit(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	expectedErr := errors.New("intentional error")
+	commit, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		return expectedErr
+	})
+
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("Expected error to be %v, got %v", expectedErr, err)
+	}
+
+	if commit != nil {
+		t.Errorf("Expected nil Commit on error, got %v", commit)
 	}
 }

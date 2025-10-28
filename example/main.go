@@ -71,7 +71,7 @@ func main() {
 	fmt.Printf("Found %d tasks\n", len(keys))
 
 	// Example 5: Use a transaction
-	err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
 		var current Task
 		if err := tx.Get(key, &current); err != nil {
 			return err

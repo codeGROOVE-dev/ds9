@@ -116,6 +116,13 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 	}, nil
 }
 
+// Close closes the client connection.
+// This is a no-op for ds9 since it uses a shared HTTP client with connection pooling,
+// but is provided for API compatibility with cloud.google.com/go/datastore.
+func (*Client) Close() error {
+	return nil
+}
+
 // Key represents a Datastore key.
 type Key struct {
 	Parent *Key // Parent key for hierarchical keys
@@ -991,6 +998,94 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 	return keys, nil
 }
 
+// GetAll retrieves all entities matching the query and stores them in dst.
+// dst must be a pointer to a slice of structs.
+// Returns the keys of the retrieved entities and any error.
+// This matches the API of cloud.google.com/go/datastore.
+func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, error) {
+	c.logger.DebugContext(ctx, "querying for entities", "kind", query.kind, "limit", query.limit)
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	queryObj := map[string]any{
+		"kind": []map[string]any{{"name": query.kind}},
+	}
+	if query.limit > 0 {
+		queryObj["limit"] = query.limit
+	}
+
+	reqBody := map[string]any{"query": queryObj}
+	if c.databaseID != "" {
+		reqBody["databaseId"] = c.databaseID
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "query request failed", "error", err, "kind", query.kind)
+		return nil, err
+	}
+
+	var result struct {
+		Batch struct {
+			EntityResults []struct {
+				Entity map[string]any `json:"entity"`
+			} `json:"entityResults"`
+		} `json:"batch"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Verify dst is a pointer to slice
+	v := reflect.ValueOf(dst)
+	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
+		return nil, errors.New("dst must be a pointer to slice")
+	}
+
+	sliceType := v.Elem().Type()
+	elemType := sliceType.Elem()
+
+	// Create new slice of correct size
+	slice := reflect.MakeSlice(sliceType, 0, len(result.Batch.EntityResults))
+	keys := make([]*Key, 0, len(result.Batch.EntityResults))
+
+	for _, er := range result.Batch.EntityResults {
+		// Extract key
+		key, err := keyFromJSON(er.Entity["key"])
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to parse key from response", "error", err)
+			return nil, err
+		}
+		keys = append(keys, key)
+
+		// Decode entity
+		elem := reflect.New(elemType).Elem()
+		if err := decodeEntity(er.Entity, elem.Addr().Interface()); err != nil {
+			c.logger.ErrorContext(ctx, "failed to decode entity", "error", err)
+			return nil, err
+		}
+		slice = reflect.Append(slice, elem)
+	}
+
+	v.Elem().Set(slice)
+	c.logger.DebugContext(ctx, "query completed successfully", "kind", query.kind, "entities_found", len(keys))
+	return keys, nil
+}
+
 // keyFromJSON converts a JSON key representation to a Key.
 func keyFromJSON(keyData any) (*Key, error) {
 	keyMap, ok := keyData.(map[string]any)
@@ -1031,6 +1126,10 @@ func keyFromJSON(keyData any) (*Key, error) {
 	return key, nil
 }
 
+// Commit represents the result of a committed transaction.
+// This is provided for API compatibility with cloud.google.com/go/datastore.
+type Commit struct{}
+
 // Transaction represents a Datastore transaction.
 // Note: This struct stores context for API compatibility with Google's official
 // cloud.google.com/go/datastore library, which uses the same pattern.
@@ -1044,14 +1143,14 @@ type Transaction struct {
 // RunInTransaction runs a function in a transaction.
 // The function should use the transaction's Get and Put methods.
 // API compatible with cloud.google.com/go/datastore.
-func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error) error {
+func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error) (*Commit, error) {
 	const maxTxRetries = 3
 	var lastErr error
 
 	for attempt := range maxTxRetries {
 		token, err := auth.AccessToken(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get access token: %w", err)
+			return nil, fmt.Errorf("failed to get access token: %w", err)
 		}
 
 		// Begin transaction
@@ -1062,14 +1161,14 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		// URL-encode project ID to prevent injection attacks
 		reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", apiURL, neturl.PathEscape(c.projectID))
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -1084,7 +1183,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
@@ -1093,11 +1192,11 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 			c.logger.Warn("failed to close response body", "error", closeErr)
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("begin transaction failed with status %d: %s", resp.StatusCode, string(body))
+			return nil, fmt.Errorf("begin transaction failed with status %d: %s", resp.StatusCode, string(body))
 		}
 
 		var txResp struct {
@@ -1105,7 +1204,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		}
 
 		if err := json.Unmarshal(body, &txResp); err != nil {
-			return fmt.Errorf("failed to parse transaction response: %w", err)
+			return nil, fmt.Errorf("failed to parse transaction response: %w", err)
 		}
 
 		tx := &Transaction{
@@ -1117,14 +1216,14 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		// Run the function
 		if err := f(tx); err != nil {
 			// Rollback is implicit if commit is not called
-			return err
+			return nil, err
 		}
 
 		// Commit the transaction
 		err = tx.commit(ctx, token)
 		if err == nil {
 			c.logger.Debug("transaction committed successfully", "attempt", attempt+1)
-			return nil // Success
+			return &Commit{}, nil // Success
 		}
 
 		c.logger.Warn("transaction commit failed", "attempt", attempt+1, "error", err)
@@ -1154,10 +1253,10 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 
 		// Non-retriable error
 		c.logger.Warn("non-retriable transaction error", "error", err)
-		return err
+		return nil, err
 	}
 
-	return fmt.Errorf("transaction failed after %d attempts: %w", maxTxRetries, lastErr)
+	return nil, fmt.Errorf("transaction failed after %d attempts: %w", maxTxRetries, lastErr)
 }
 
 // Get retrieves an entity within the transaction.
