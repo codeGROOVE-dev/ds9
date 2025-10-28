@@ -8,11 +8,11 @@ Run the standard test suite with mock Datastore:
 make test
 ```
 
-This uses `ds9mock` for in-memory testing without requiring GCP credentials.
+This runs all tests including integration tests against an in-memory mock server. No GCP credentials required.
 
 ## Integration Tests
 
-Integration tests run against real Google Cloud Datastore and automatically manage database lifecycle.
+Integration tests automatically use the mock server by default, but can run against real Google Cloud Datastore when `DS9_TEST_PROJECT` is set.
 
 ### Prerequisites
 
@@ -40,9 +40,10 @@ make integration
 ```
 
 This will automatically:
-1. Create a temporary Datastore database (`ds9-test`)
-2. Run the full integration test suite
-3. Delete the temporary database (even if tests fail)
+1. Check if the test database (`ds9-test`) exists, or create it if needed
+2. If creating a new database, wait 10 seconds for it to propagate (GCP needs time to make the database available)
+3. Run the full integration test suite (including cleanup of test entities)
+4. Retain the database for reuse in subsequent test runs
 
 **Customization:**
 ```bash
@@ -56,29 +57,39 @@ make integration DS9_TEST_DATABASE=my-test-db
 make integration DS9_TEST_LOCATION=europe-west1
 ```
 
+### How It Works
+
+- **Without `DS9_TEST_PROJECT`**: Tests run against an in-memory mock server (fast, no GCP needed)
+- **With `DS9_TEST_PROJECT`**: Tests run against real Google Cloud Datastore (requires GCP credentials)
+
+The same test code runs in both modes, ensuring the mock accurately represents real Datastore behavior.
+
 ### What Gets Tested
 
 - **Basic Operations**: Put, Get, Update, Delete
 - **Batch Operations**: PutMulti, GetMulti, DeleteMulti
 - **Transactions**: Read-modify-write operations
 - **Queries**: KeysOnly queries with limits
+- **Cleanup**: DeleteAllByKind operation
 
 ### Test Data
 
-Test entities use the kind `DS9IntegrationTest` with unique timestamp-based names to avoid conflicts. The test database (`ds9-test`) is automatically created before tests and deleted after, ensuring complete cleanup.
+Test entities use the kind `DS9IntegrationTest` with unique timestamp-based names to avoid conflicts. Each test run creates entities, and the final cleanup test deletes all entities of this kind.
 
-### Manual Cleanup
+### Database Cleanup
 
-The Makefile automatically cleans up the test database, even if tests fail. If you need to manually clean up:
+The test database is retained between test runs for performance (database creation takes several minutes). Test entities are automatically cleaned up at the end of each test run.
+
+To manually delete the test database:
 
 ```bash
-# List databases
-gcloud firestore databases list --project=integration-testing-476513
+# Delete test database
+make clean-integration-db
 
-# Delete test database if it exists
+# Or use gcloud directly
 gcloud firestore databases delete --database=ds9-test --project=integration-testing-476513
 ```
 
 ### Costs
 
-Integration tests create a temporary database and a small number of entities (typically <20 per run). The database and all data are deleted after the test run completes. This should fall well within GCP free tier limits.
+Integration tests create or reuse a persistent database and a small number of entities (typically <20 per run). Entities are deleted after each test run. The persistent database incurs minimal costs and should fall well within GCP free tier limits.

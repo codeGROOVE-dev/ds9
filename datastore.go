@@ -87,7 +87,7 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 
 	if projID == "" {
 		logger.InfoContext(ctx, "project ID not provided, fetching from metadata server")
-		pid, err := projectID(ctx)
+		pid, err := auth.ProjectID(ctx)
 		if err != nil {
 			logger.ErrorContext(ctx, "failed to get project ID from metadata server", "error", err)
 			return nil, fmt.Errorf("project ID required: %w", err)
@@ -103,11 +103,6 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 		databaseID: dbID,
 		logger:     logger,
 	}, nil
-}
-
-// projectID retrieves the project ID using the auth package.
-func projectID(ctx context.Context) (string, error) {
-	return auth.ProjectID(ctx)
 }
 
 // accessToken retrieves an access token using the auth package.
@@ -220,6 +215,11 @@ func doRequest(ctx context.Context, logger *slog.Logger, url string, jsonData []
 			"body_size", len(body),
 			"attempt", attempt+1)
 
+		// Success
+		if resp.StatusCode == http.StatusOK {
+			return body, nil
+		}
+
 		// Don't retry on 4xx errors (client errors)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			if resp.StatusCode == http.StatusNotFound {
@@ -227,19 +227,13 @@ func doRequest(ctx context.Context, logger *slog.Logger, url string, jsonData []
 			} else {
 				logger.WarnContext(ctx, "client error", "status_code", resp.StatusCode, "body", string(body))
 			}
-			if resp.StatusCode != http.StatusOK {
-				return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
-			}
-			return body, nil
+			return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 		}
 
-		// Success
+		// Unexpected 2xx/3xx status codes
 		if resp.StatusCode < 400 {
-			if resp.StatusCode != http.StatusOK {
-				logger.WarnContext(ctx, "unexpected success status code", "status_code", resp.StatusCode)
-				return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
-			}
-			return body, nil
+			logger.WarnContext(ctx, "unexpected non-200 success status", "status_code", resp.StatusCode)
+			return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
 		}
 
 		// 5xx errors - retry
@@ -616,6 +610,34 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 	return nil
 }
 
+// DeleteAllByKind deletes all entities of a given kind.
+// This method queries for all keys and then deletes them in batches.
+func (c *Client) DeleteAllByKind(ctx context.Context, kind string) error {
+	c.logger.InfoContext(ctx, "deleting all entities by kind", "kind", kind)
+
+	// Query for all keys of this kind
+	q := NewQuery(kind).KeysOnly()
+	keys, err := c.AllKeys(ctx, q)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to query keys", "kind", kind, "error", err)
+		return fmt.Errorf("failed to query keys: %w", err)
+	}
+
+	if len(keys) == 0 {
+		c.logger.InfoContext(ctx, "no entities found to delete", "kind", kind)
+		return nil
+	}
+
+	// Delete all keys
+	if err := c.DeleteMulti(ctx, keys); err != nil {
+		c.logger.ErrorContext(ctx, "failed to delete entities", "kind", kind, "count", len(keys), "error", err)
+		return fmt.Errorf("failed to delete entities: %w", err)
+	}
+
+	c.logger.InfoContext(ctx, "deleted all entities", "kind", kind, "count", len(keys))
+	return nil
+}
+
 // keyToJSON converts a Key to its JSON representation.
 // Supports hierarchical keys with parent relationships.
 func keyToJSON(key *Key) map[string]any {
@@ -631,17 +653,17 @@ func keyToJSON(key *Key) map[string]any {
 	// Reverse to go from root to leaf
 	for i := len(keys) - 1; i >= 0; i-- {
 		k := keys[i]
-		pathElement := map[string]any{
+		elem := map[string]any{
 			"kind": k.Kind,
 		}
 
 		if k.Name != "" {
-			pathElement["name"] = k.Name
+			elem["name"] = k.Name
 		} else if k.ID != 0 {
-			pathElement["id"] = strconv.FormatInt(k.ID, 10)
+			elem["id"] = strconv.FormatInt(k.ID, 10)
 		}
 
-		path = append(path, pathElement)
+		path = append(path, elem)
 	}
 
 	return map[string]any{
@@ -996,7 +1018,10 @@ func keyFromJSON(keyData any) (*Key, error) {
 }
 
 // Transaction represents a Datastore transaction.
+// Note: This struct stores context for API compatibility with Google's official
+// cloud.google.com/go/datastore library, which uses the same pattern.
 type Transaction struct {
+	ctx       context.Context //nolint:containedctx // Required for API compatibility with cloud.google.com/go/datastore
 	client    *Client
 	id        string
 	mutations []map[string]any
@@ -1004,6 +1029,7 @@ type Transaction struct {
 
 // RunInTransaction runs a function in a transaction.
 // The function should use the transaction's Get and Put methods.
+// API compatible with cloud.google.com/go/datastore.
 func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error) error {
 	const maxTxRetries = 3
 	var lastErr error
@@ -1067,6 +1093,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		}
 
 		tx := &Transaction{
+			ctx:    ctx,
 			client: c,
 			id:     txResp.Transaction,
 		}
@@ -1118,16 +1145,13 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 }
 
 // Get retrieves an entity within the transaction.
+// API compatible with cloud.google.com/go/datastore.
 func (tx *Transaction) Get(key *Key, dst any) error {
 	if key == nil {
 		return errors.New("key cannot be nil")
 	}
 
-	// For simplicity, we'll use a context.Background() here
-	// In a production implementation, you might want to pass context through
-	ctx := context.Background()
-
-	token, err := accessToken(ctx)
+	token, err := accessToken(tx.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
@@ -1151,7 +1175,7 @@ func (tx *Transaction) Get(key *Key, dst any) error {
 	}
 
 	url := fmt.Sprintf("%s/projects/%s:lookup", apiURL, tx.client.projectID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+	req, err := http.NewRequestWithContext(tx.ctx, http.MethodPost, url, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
 	}

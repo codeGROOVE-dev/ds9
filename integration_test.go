@@ -1,6 +1,3 @@
-//go:build integration
-// +build integration
-
 package ds9_test
 
 import (
@@ -11,6 +8,7 @@ import (
 	"time"
 
 	"github.com/codeGROOVE-dev/ds9"
+	"github.com/codeGROOVE-dev/ds9/ds9mock"
 )
 
 const (
@@ -26,23 +24,30 @@ func testProject() string {
 	return defaultTestProject
 }
 
-// testEntity for integration tests
-type integrationEntity struct {
-	Name      string    `datastore:"name"`
-	Count     int64     `datastore:"count"`
-	Timestamp time.Time `datastore:"timestamp"`
+// integrationClient returns either a real GCP client or a mock client
+// based on whether DS9_TEST_PROJECT is set.
+func integrationClient(t *testing.T) (client *ds9.Client, cleanup func()) {
+	t.Helper()
+
+	if os.Getenv("DS9_TEST_PROJECT") != "" {
+		// Real GCP integration test
+		ctx := context.Background()
+		client, err := ds9.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
+		if err != nil {
+			t.Fatalf("Failed to create GCP client: %v", err)
+		}
+		return client, func() {} // No cleanup needed
+	}
+
+	// Mock client for unit testing
+	return ds9mock.NewClient(t)
 }
 
 func TestIntegrationBasicOperations(t *testing.T) {
-	if os.Getenv("DS9_TEST_PROJECT") == "" {
-		t.Skip("Skipping integration test. Set DS9_TEST_PROJECT=your-project to run.")
-	}
+	client, cleanup := integrationClient(t)
+	defer cleanup()
 
 	ctx := context.Background()
-	client, err := ds9.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
 
 	// Generate unique key for this test run
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
@@ -122,15 +127,10 @@ func TestIntegrationBasicOperations(t *testing.T) {
 }
 
 func TestIntegrationBatchOperations(t *testing.T) {
-	if os.Getenv("DS9_TEST_PROJECT") == "" {
-		t.Skip("Skipping integration test. Set DS9_TEST_PROJECT=your-project to run.")
-	}
+	client, cleanup := integrationClient(t)
+	defer cleanup()
 
 	ctx := context.Background()
-	client, err := ds9.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
 
 	// Generate unique keys for this test run
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
@@ -194,15 +194,10 @@ func TestIntegrationBatchOperations(t *testing.T) {
 }
 
 func TestIntegrationTransaction(t *testing.T) {
-	if os.Getenv("DS9_TEST_PROJECT") == "" {
-		t.Skip("Skipping integration test. Set DS9_TEST_PROJECT=your-project to run.")
-	}
+	client, cleanup := integrationClient(t)
+	defer cleanup()
 
 	ctx := context.Background()
-	client, err := ds9.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
 
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
 	key := ds9.NameKey(testKind, testID, nil)
@@ -258,15 +253,10 @@ func TestIntegrationTransaction(t *testing.T) {
 }
 
 func TestIntegrationQuery(t *testing.T) {
-	if os.Getenv("DS9_TEST_PROJECT") == "" {
-		t.Skip("Skipping integration test. Set DS9_TEST_PROJECT=your-project to run.")
-	}
+	client, cleanup := integrationClient(t)
+	defer cleanup()
 
 	ctx := context.Background()
-	client, err := ds9.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
-	if err != nil {
-		t.Fatalf("Failed to create client: %v", err)
-	}
 
 	// Create test entities
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
@@ -281,7 +271,7 @@ func TestIntegrationQuery(t *testing.T) {
 		}
 	}
 
-	_, err = client.PutMulti(ctx, keys, entities)
+	_, err := client.PutMulti(ctx, keys, entities)
 	if err != nil {
 		t.Fatalf("PutMulti failed: %v", err)
 	}
@@ -319,4 +309,53 @@ func TestIntegrationQuery(t *testing.T) {
 			t.Errorf("expected to find all 5 test keys, found %d", found)
 		}
 	})
+}
+
+func TestIntegrationCleanup(t *testing.T) {
+	client, cleanup := integrationClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// First create some test entities
+	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
+	keys := []*ds9.Key{
+		ds9.NameKey(testKind, testID+"-1", nil),
+		ds9.NameKey(testKind, testID+"-2", nil),
+	}
+	entities := []integrationEntity{
+		{Name: "cleanup-1", Count: 1, Timestamp: time.Now().UTC().Truncate(time.Microsecond)},
+		{Name: "cleanup-2", Count: 2, Timestamp: time.Now().UTC().Truncate(time.Microsecond)},
+	}
+
+	_, err := client.PutMulti(ctx, keys, entities)
+	if err != nil {
+		t.Fatalf("PutMulti failed: %v", err)
+	}
+
+	t.Run("CleanupTestEntities", func(t *testing.T) {
+		// Delete all test entities
+		err := client.DeleteAllByKind(ctx, testKind)
+		if err != nil {
+			t.Fatalf("Failed to delete test entities: %v", err)
+		}
+
+		// Verify all entities are deleted
+		q := ds9.NewQuery(testKind).KeysOnly()
+		keys, err := client.AllKeys(ctx, q)
+		if err != nil {
+			t.Fatalf("Failed to query after cleanup: %v", err)
+		}
+
+		if len(keys) != 0 {
+			t.Errorf("expected 0 keys after cleanup, found %d", len(keys))
+		}
+	})
+}
+
+// integrationEntity for integration tests
+type integrationEntity struct {
+	Name      string    `datastore:"name"`
+	Count     int64     `datastore:"count"`
+	Timestamp time.Time `datastore:"timestamp"`
 }
