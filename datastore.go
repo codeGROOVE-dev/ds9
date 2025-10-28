@@ -1140,14 +1140,56 @@ type Transaction struct {
 	mutations []map[string]any
 }
 
+// TransactionOption configures transaction behavior.
+type TransactionOption interface {
+	apply(*transactionSettings)
+}
+
+type transactionSettings struct {
+	readTime    time.Time
+	maxAttempts int
+}
+
+type maxAttemptsOption int
+
+func (o maxAttemptsOption) apply(s *transactionSettings) {
+	s.maxAttempts = int(o)
+}
+
+// MaxAttempts returns a TransactionOption that specifies the maximum number
+// of times a transaction should be attempted before giving up.
+func MaxAttempts(n int) TransactionOption {
+	return maxAttemptsOption(n)
+}
+
+type readTimeOption struct {
+	t time.Time
+}
+
+func (o readTimeOption) apply(s *transactionSettings) {
+	s.readTime = o.t
+}
+
+// WithReadTime returns a TransactionOption that sets a specific timestamp
+// at which to read data, enabling reading from a particular snapshot in time.
+func WithReadTime(t time.Time) TransactionOption {
+	return readTimeOption{t: t}
+}
+
 // RunInTransaction runs a function in a transaction.
 // The function should use the transaction's Get and Put methods.
 // API compatible with cloud.google.com/go/datastore.
-func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error) (*Commit, error) {
-	const maxTxRetries = 3
+func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error, opts ...TransactionOption) (*Commit, error) {
+	settings := transactionSettings{
+		maxAttempts: 3, // default
+	}
+	for _, opt := range opts {
+		opt.apply(&settings)
+	}
+
 	var lastErr error
 
-	for attempt := range maxTxRetries {
+	for attempt := range settings.maxAttempts {
 		token, err := auth.AccessToken(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get access token: %w", err)
@@ -1157,6 +1199,19 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		reqBody := map[string]any{}
 		if c.databaseID != "" {
 			reqBody["databaseId"] = c.databaseID
+		}
+
+		// Add transaction options if needed
+		if !settings.readTime.IsZero() {
+			reqBody["transactionOptions"] = map[string]any{
+				"readOnly": map[string]any{
+					"readTime": settings.readTime.Format(time.RFC3339Nano),
+				},
+			}
+		} else {
+			reqBody["transactionOptions"] = map[string]any{
+				"readWrite": map[string]any{},
+			}
 		}
 
 		jsonData, err := json.Marshal(reqBody)
@@ -1237,13 +1292,13 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 			lastErr = err
 			c.logger.Warn("transaction aborted, will retry",
 				"attempt", attempt+1,
-				"max_attempts", maxTxRetries,
+				"max_attempts", settings.maxAttempts,
 				"has_409", is409,
 				"has_ABORTED", isAborted,
 				"error", err)
 
 			// Exponential backoff: 100ms, 200ms, 400ms
-			if attempt < maxTxRetries-1 {
+			if attempt < settings.maxAttempts-1 {
 				backoffMS := 100 * (1 << attempt)
 				c.logger.Debug("sleeping before retry", "backoff_ms", backoffMS)
 				time.Sleep(time.Duration(backoffMS) * time.Millisecond)
@@ -1256,7 +1311,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		return nil, err
 	}
 
-	return nil, fmt.Errorf("transaction failed after %d attempts: %w", maxTxRetries, lastErr)
+	return nil, fmt.Errorf("transaction failed after %d attempts: %w", settings.maxAttempts, lastErr)
 }
 
 // Get retrieves an entity within the transaction.

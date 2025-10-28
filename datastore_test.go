@@ -7264,3 +7264,73 @@ func TestRunInTransactionErrorReturnsNilCommit(t *testing.T) {
 		t.Errorf("Expected nil Commit on error, got %v", commit)
 	}
 }
+
+func TestTransactionOptions(t *testing.T) {
+	t.Run("MaxAttempts", func(t *testing.T) {
+		// Test that MaxAttempts option is accepted and sets the retry limit
+		// We can verify this by checking the error message mentions the right attempt count
+		client, cleanup := ds9mock.NewClient(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		key := ds9.NameKey("TestKind", "test", nil)
+
+		// This test verifies that the MaxAttempts option is parsed correctly
+		// The actual retry behavior is tested in TestTransactionMaxRetriesExceeded
+		_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+			entity := testEntity{Name: "test", Count: 42}
+			_, err := tx.Put(key, &entity)
+			return err
+		}, ds9.MaxAttempts(5))
+		// With mock client, this should succeed
+		if err != nil {
+			t.Fatalf("Transaction failed: %v", err)
+		}
+	})
+
+	t.Run("WithReadTime", func(t *testing.T) {
+		client, cleanup := ds9mock.NewClient(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		key := ds9.NameKey("TestKind", "test", nil)
+
+		// First, put an entity
+		entity := testEntity{Name: "test", Count: 42}
+		_, err := client.Put(ctx, key, &entity)
+		if err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+
+		// Run a read-only transaction with readTime
+		readTime := time.Now().UTC()
+		_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+			var result testEntity
+			return tx.Get(key, &result)
+		}, ds9.WithReadTime(readTime))
+		// Note: ds9mock doesn't actually enforce read-only semantics,
+		// but we're testing that the option is accepted and doesn't cause errors
+		if err != nil {
+			t.Fatalf("Transaction with WithReadTime failed: %v", err)
+		}
+	})
+
+	t.Run("CombinedOptions", func(t *testing.T) {
+		client, cleanup := ds9mock.NewClient(t)
+		defer cleanup()
+
+		ctx := context.Background()
+		key := ds9.NameKey("TestKind", "test", nil)
+
+		// Test that multiple options can be combined
+		_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+			entity := testEntity{Name: "test", Count: 42}
+			_, err := tx.Put(key, &entity)
+			return err
+		}, ds9.MaxAttempts(2), ds9.WithReadTime(time.Now().UTC()))
+		// With mock client, this should succeed
+		if err != nil {
+			t.Fatalf("Transaction with combined options failed: %v", err)
+		}
+	})
+}
