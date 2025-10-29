@@ -8,6 +8,7 @@ package ds9
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +50,15 @@ var (
 			IdleConnTimeout:     30 * time.Second,
 			MaxIdleConnsPerHost: 2,
 		},
+	}
+
+	// operatorMap converts shorthand operators to Datastore API operators.
+	operatorMap = map[string]string{
+		"=":  "EQUAL",
+		"<":  "LESS_THAN",
+		"<=": "LESS_THAN_OR_EQUAL",
+		">":  "GREATER_THAN",
+		">=": "GREATER_THAN_OR_EQUAL",
 	}
 )
 
@@ -151,6 +161,111 @@ func IDKey(kind string, id int64, parent *Key) *Key {
 		ID:     id,
 		Parent: parent,
 	}
+}
+
+// IncompleteKey creates a new incomplete key.
+// The key will be completed (assigned an ID) when the entity is saved.
+// API compatible with cloud.google.com/go/datastore.
+func IncompleteKey(kind string, parent *Key) *Key {
+	return &Key{
+		Kind:   kind,
+		Parent: parent,
+	}
+}
+
+// Incomplete returns true if the key does not have an ID or Name.
+// API compatible with cloud.google.com/go/datastore.
+func (k *Key) Incomplete() bool {
+	return k.ID == 0 && k.Name == ""
+}
+
+// Equal returns true if this key is equal to the other key.
+// API compatible with cloud.google.com/go/datastore.
+func (k *Key) Equal(other *Key) bool {
+	if k == nil && other == nil {
+		return true
+	}
+	if k == nil || other == nil {
+		return false
+	}
+	if k.Kind != other.Kind || k.Name != other.Name || k.ID != other.ID {
+		return false
+	}
+	// Recursively check parent keys
+	return k.Parent.Equal(other.Parent)
+}
+
+// String returns a human-readable string representation of the key.
+// API compatible with cloud.google.com/go/datastore.
+func (k *Key) String() string {
+	if k == nil {
+		return ""
+	}
+
+	var parts []string
+	for curr := k; curr != nil; curr = curr.Parent {
+		var part string
+		switch {
+		case curr.Name != "":
+			part = fmt.Sprintf("%s,%q", curr.Kind, curr.Name)
+		case curr.ID != 0:
+			part = fmt.Sprintf("%s,%d", curr.Kind, curr.ID)
+		default:
+			part = fmt.Sprintf("%s,incomplete", curr.Kind)
+		}
+		// Prepend to maintain correct order (root to leaf)
+		parts = append([]string{part}, parts...)
+	}
+
+	return "/" + strings.Join(parts, "/")
+}
+
+// Encode returns an opaque representation of the key.
+// API compatible with cloud.google.com/go/datastore.
+func (k *Key) Encode() string {
+	if k == nil {
+		return ""
+	}
+
+	// Convert key to JSON representation
+	keyJSON := keyToJSON(k)
+
+	// Marshal to JSON bytes
+	jsonBytes, err := json.Marshal(keyJSON)
+	if err != nil {
+		return ""
+	}
+
+	// Base64 encode
+	return base64.URLEncoding.EncodeToString(jsonBytes)
+}
+
+// DecodeKey decodes a key from its opaque representation.
+// API compatible with cloud.google.com/go/datastore.
+func DecodeKey(encoded string) (*Key, error) {
+	if encoded == "" {
+		return nil, errors.New("empty encoded key")
+	}
+
+	// Base64 decode
+	jsonBytes, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode base64: %w", err)
+	}
+
+	// Unmarshal JSON
+	var keyData any
+	if err := json.Unmarshal(jsonBytes, &keyData); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+
+	// Convert from JSON representation
+	key, err := keyFromJSON(keyData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse key: %w", err)
+	}
+
+	return key, nil
 }
 
 // doRequest performs an HTTP request with exponential backoff retries.
@@ -904,9 +1019,25 @@ func decodeValue(prop map[string]any, dst reflect.Value) error {
 
 // Query represents a Datastore query.
 type Query struct {
-	kind     string
-	keysOnly bool
-	limit    int
+	ancestor   *Key
+	kind       string
+	filters    []queryFilter
+	orders     []queryOrder
+	projection []string
+	limit      int
+	offset     int
+	keysOnly   bool
+}
+
+type queryFilter struct {
+	value    any
+	property string
+	operator string
+}
+
+type queryOrder struct {
+	property  string
+	direction string // "ASCENDING" or "DESCENDING"
 }
 
 // NewQuery creates a new query for the given kind.
@@ -928,6 +1059,197 @@ func (q *Query) Limit(limit int) *Query {
 	return q
 }
 
+// Offset sets the number of results to skip before returning.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Offset(offset int) *Query {
+	q.offset = offset
+	return q
+}
+
+// Filter adds a property filter to the query.
+// The filterStr should be in the format "Property Operator" (e.g., "Count >", "Name =").
+// Deprecated: Use FilterField instead. API compatible with cloud.google.com/go/datastore.
+func (q *Query) Filter(filterStr string, value any) *Query {
+	// Parse the filter string to extract property and operator
+	parts := strings.Fields(filterStr)
+	if len(parts) != 2 {
+		// Invalid filter format, but we'll be lenient
+		return q
+	}
+
+	property := parts[0]
+	op := parts[1]
+
+	operator, ok := operatorMap[op]
+	if !ok {
+		operator = "EQUAL"
+	}
+
+	q.filters = append(q.filters, queryFilter{
+		property: property,
+		operator: operator,
+		value:    value,
+	})
+
+	return q
+}
+
+// FilterField adds a property filter to the query with explicit operator.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) FilterField(fieldName, operator string, value any) *Query {
+	dsOperator, ok := operatorMap[operator]
+	if !ok {
+		dsOperator = operator // Use as-is if not in map (might already be EQUAL, etc.)
+	}
+
+	q.filters = append(q.filters, queryFilter{
+		property: fieldName,
+		operator: dsOperator,
+		value:    value,
+	})
+
+	return q
+}
+
+// Order sets the order in which results are returned.
+// Prefix the property name with "-" for descending order (e.g., "-Created").
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Order(fieldName string) *Query {
+	direction := "ASCENDING"
+	property := fieldName
+
+	if strings.HasPrefix(fieldName, "-") {
+		direction = "DESCENDING"
+		property = fieldName[1:]
+	}
+
+	q.orders = append(q.orders, queryOrder{
+		property:  property,
+		direction: direction,
+	})
+
+	return q
+}
+
+// Ancestor sets an ancestor filter for the query.
+// Only entities with the given ancestor will be returned.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Ancestor(ancestor *Key) *Query {
+	q.ancestor = ancestor
+	return q
+}
+
+// Project sets the fields to be projected (returned) in the query results.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Project(fieldNames ...string) *Query {
+	q.projection = fieldNames
+	return q
+}
+
+// buildQueryMap creates a Datastore API query map from a Query object.
+func buildQueryMap(query *Query) map[string]any {
+	queryMap := map[string]any{
+		"kind": []map[string]any{{"name": query.kind}},
+	}
+
+	// Add filters
+	if len(query.filters) > 0 {
+		var compositeFilters []map[string]any
+		for _, f := range query.filters {
+			encodedVal, err := encodeValue(f.value)
+			if err != nil {
+				// Skip invalid filters
+				continue
+			}
+			compositeFilters = append(compositeFilters, map[string]any{
+				"propertyFilter": map[string]any{
+					"property": map[string]string{"name": f.property},
+					"op":       f.operator,
+					"value":    encodedVal,
+				},
+			})
+		}
+
+		if len(compositeFilters) == 1 {
+			queryMap["filter"] = compositeFilters[0]
+		} else if len(compositeFilters) > 1 {
+			queryMap["filter"] = map[string]any{
+				"compositeFilter": map[string]any{
+					"op":      "AND",
+					"filters": compositeFilters,
+				},
+			}
+		}
+	}
+
+	// Add ancestor filter
+	if query.ancestor != nil {
+		ancestorFilter := map[string]any{
+			"propertyFilter": map[string]any{
+				"property": map[string]string{"name": "__key__"},
+				"op":       "HAS_ANCESTOR",
+				"value":    map[string]any{"keyValue": keyToJSON(query.ancestor)},
+			},
+		}
+
+		// Combine with existing filters if present
+		if existingFilter, ok := queryMap["filter"]; ok {
+			existingMap, ok := existingFilter.(map[string]any)
+			if !ok {
+				// Skip if filter is invalid
+				queryMap["filter"] = ancestorFilter
+			} else {
+				queryMap["filter"] = map[string]any{
+					"compositeFilter": map[string]any{
+						"op":      "AND",
+						"filters": []map[string]any{existingMap, ancestorFilter},
+					},
+				}
+			}
+		} else {
+			queryMap["filter"] = ancestorFilter
+		}
+	}
+
+	// Add ordering
+	if len(query.orders) > 0 {
+		var orders []map[string]any
+		for _, o := range query.orders {
+			orders = append(orders, map[string]any{
+				"property":  map[string]string{"name": o.property},
+				"direction": o.direction,
+			})
+		}
+		queryMap["order"] = orders
+	}
+
+	// Add projection
+	if len(query.projection) > 0 {
+		var projections []map[string]any
+		for _, field := range query.projection {
+			projections = append(projections, map[string]any{
+				"property": map[string]string{"name": field},
+			})
+		}
+		queryMap["projection"] = projections
+	} else if query.keysOnly {
+		// Keys-only projection
+		queryMap["projection"] = []map[string]any{{"property": map[string]string{"name": "__key__"}}}
+	}
+
+	// Add limit
+	if query.limit > 0 {
+		queryMap["limit"] = query.limit
+	}
+
+	// Add offset
+	if query.offset > 0 {
+		queryMap["offset"] = query.offset
+	}
+
+	return queryMap
+}
+
 // AllKeys returns all keys matching the query.
 // This is a convenience method for KeysOnly queries.
 func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
@@ -944,13 +1266,7 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	query := map[string]any{
-		"kind":       []map[string]any{{"name": q.kind}},
-		"projection": []map[string]any{{"property": map[string]string{"name": "__key__"}}},
-	}
-	if q.limit > 0 {
-		query["limit"] = q.limit
-	}
+	query := buildQueryMap(q)
 
 	reqBody := map[string]any{"query": query}
 	if c.databaseID != "" {
@@ -1011,12 +1327,7 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	queryObj := map[string]any{
-		"kind": []map[string]any{{"name": query.kind}},
-	}
-	if query.limit > 0 {
-		queryObj["limit"] = query.limit
-	}
+	queryObj := buildQueryMap(query)
 
 	reqBody := map[string]any{"query": queryObj}
 	if c.databaseID != "" {
@@ -1098,29 +1409,36 @@ func keyFromJSON(keyData any) (*Key, error) {
 		return nil, errors.New("invalid key path")
 	}
 
-	// Get the last path element (we only support simple keys)
-	lastElem, ok := path[len(path)-1].(map[string]any)
-	if !ok {
-		return nil, errors.New("invalid path element")
-	}
-
-	key := &Key{}
-
-	if kind, ok := lastElem["kind"].(string); ok {
-		key.Kind = kind
-	}
-
-	if name, ok := lastElem["name"].(string); ok {
-		key.Name = name
-	} else if idVal, exists := lastElem["id"]; exists {
-		switch id := idVal.(type) {
-		case string:
-			if _, err := fmt.Sscanf(id, "%d", &key.ID); err != nil {
-				return nil, fmt.Errorf("invalid ID format: %w", err)
-			}
-		case float64:
-			key.ID = int64(id)
+	// Build key hierarchy from path elements
+	var key *Key
+	for _, elem := range path {
+		elemMap, ok := elem.(map[string]any)
+		if !ok {
+			return nil, errors.New("invalid path element")
 		}
+
+		newKey := &Key{
+			Parent: key,
+		}
+
+		if kind, ok := elemMap["kind"].(string); ok {
+			newKey.Kind = kind
+		}
+
+		if name, ok := elemMap["name"].(string); ok {
+			newKey.Name = name
+		} else if idVal, exists := elemMap["id"]; exists {
+			switch id := idVal.(type) {
+			case string:
+				if _, err := fmt.Sscanf(id, "%d", &newKey.ID); err != nil {
+					return nil, fmt.Errorf("invalid ID format: %w", err)
+				}
+			case float64:
+				newKey.ID = int64(id)
+			}
+		}
+
+		key = newKey
 	}
 
 	return key, nil
@@ -1174,6 +1492,98 @@ func (o readTimeOption) apply(s *transactionSettings) {
 // at which to read data, enabling reading from a particular snapshot in time.
 func WithReadTime(t time.Time) TransactionOption {
 	return readTimeOption{t: t}
+}
+
+// NewTransaction creates a new transaction.
+// The caller must call Commit or Rollback when done.
+// API compatible with cloud.google.com/go/datastore.
+func (c *Client) NewTransaction(ctx context.Context, opts ...TransactionOption) (*Transaction, error) {
+	settings := transactionSettings{
+		maxAttempts: 3, // default (not used for NewTransaction, but kept for consistency)
+	}
+	for _, opt := range opts {
+		opt.apply(&settings)
+	}
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Begin transaction
+	reqBody := map[string]any{}
+	if c.databaseID != "" {
+		reqBody["databaseId"] = c.databaseID
+	}
+
+	// Add transaction options if needed
+	if !settings.readTime.IsZero() {
+		reqBody["transactionOptions"] = map[string]any{
+			"readOnly": map[string]any{
+				"readTime": settings.readTime.Format(time.RFC3339Nano),
+			},
+		}
+	} else {
+		reqBody["transactionOptions"] = map[string]any{
+			"readWrite": map[string]any{},
+		}
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", apiURL, neturl.PathEscape(c.projectID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add routing header for named databases
+	if c.databaseID != "" {
+		// URL-encode values to prevent header injection attacks
+		routingHeader := fmt.Sprintf("project_id=%s&database_id=%s", neturl.QueryEscape(c.projectID), neturl.QueryEscape(c.databaseID))
+		req.Header.Set("X-Goog-Request-Params", routingHeader)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	closeErr := resp.Body.Close()
+	if closeErr != nil {
+		c.logger.Warn("failed to close response body", "error", closeErr)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("begin transaction failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var txResp struct {
+		Transaction string `json:"transaction"`
+	}
+
+	if err := json.Unmarshal(body, &txResp); err != nil {
+		return nil, fmt.Errorf("failed to parse transaction response: %w", err)
+	}
+
+	tx := &Transaction{
+		ctx:    ctx,
+		client: c,
+		id:     txResp.Transaction,
+	}
+
+	return tx, nil
 }
 
 // RunInTransaction runs a function in a transaction.
@@ -1275,7 +1685,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		}
 
 		// Commit the transaction
-		err = tx.commit(ctx, token)
+		err = tx.doCommit(ctx, token)
 		if err == nil {
 			c.logger.Debug("transaction committed successfully", "attempt", attempt+1)
 			return &Commit{}, nil // Success
@@ -1423,8 +1833,126 @@ func (tx *Transaction) Put(key *Key, src any) (*Key, error) {
 	return key, nil
 }
 
+// Delete deletes an entity within the transaction.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) Delete(key *Key) error {
+	if key == nil {
+		return errors.New("key cannot be nil")
+	}
+
+	// Create delete mutation
+	mutation := map[string]any{
+		"delete": keyToJSON(key),
+	}
+
+	// Accumulate mutation for commit
+	tx.mutations = append(tx.mutations, mutation)
+
+	return nil
+}
+
+// DeleteMulti deletes multiple entities within the transaction.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) DeleteMulti(keys []*Key) error {
+	for _, key := range keys {
+		if err := tx.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetMulti retrieves multiple entities within the transaction.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) GetMulti(keys []*Key, dst any) error {
+	dstVal := reflect.ValueOf(dst)
+	if dstVal.Kind() != reflect.Ptr || dstVal.Elem().Kind() != reflect.Slice {
+		return errors.New("dst must be a pointer to a slice")
+	}
+
+	slice := dstVal.Elem()
+	if len(keys) != slice.Len() {
+		return fmt.Errorf("keys and dst slices must have same length: %d vs %d", len(keys), slice.Len())
+	}
+
+	// Get each entity individually within the transaction
+	for i, key := range keys {
+		elem := slice.Index(i)
+		if elem.Kind() == reflect.Ptr {
+			// dst is []*Entity
+			if elem.IsNil() {
+				elem.Set(reflect.New(elem.Type().Elem()))
+			}
+			if err := tx.Get(key, elem.Interface()); err != nil {
+				return err
+			}
+		} else {
+			// dst is []Entity
+			if err := tx.Get(key, elem.Addr().Interface()); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// PutMulti stores multiple entities within the transaction.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) PutMulti(keys []*Key, src any) ([]*Key, error) {
+	srcVal := reflect.ValueOf(src)
+	if srcVal.Kind() != reflect.Slice {
+		return nil, errors.New("src must be a slice")
+	}
+
+	if len(keys) != srcVal.Len() {
+		return nil, fmt.Errorf("keys and src slices must have same length: %d vs %d", len(keys), srcVal.Len())
+	}
+
+	// Put each entity individually within the transaction
+	for i, key := range keys {
+		elem := srcVal.Index(i)
+		var src any
+		if elem.Kind() == reflect.Ptr {
+			src = elem.Interface()
+		} else {
+			src = elem.Addr().Interface()
+		}
+
+		if _, err := tx.Put(key, src); err != nil {
+			return nil, err
+		}
+	}
+
+	return keys, nil
+}
+
+// Commit applies the transaction's mutations.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) Commit() (*Commit, error) {
+	token, err := auth.AccessToken(tx.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	if err := tx.doCommit(tx.ctx, token); err != nil {
+		return nil, err
+	}
+
+	return &Commit{}, nil
+}
+
+// Rollback abandons the transaction.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) Rollback() error {
+	// Datastore transactions are automatically rolled back if not committed
+	// So we just need to clear the mutations to prevent accidental commit
+	tx.mutations = nil
+	return nil
+}
+
 // commit commits the transaction.
-func (tx *Transaction) commit(ctx context.Context, token string) error {
+func (tx *Transaction) doCommit(ctx context.Context, token string) error {
 	reqBody := map[string]any{
 		"mode":        "TRANSACTIONAL",
 		"transaction": tx.id,

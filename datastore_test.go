@@ -17,12 +17,12 @@ import (
 
 // testEntity represents a simple test entity.
 type testEntity struct {
-	Name      string    `datastore:"name"`
-	Count     int64     `datastore:"count"`
-	Active    bool      `datastore:"active"`
-	Score     float64   `datastore:"score"`
 	UpdatedAt time.Time `datastore:"updated_at"`
+	Name      string    `datastore:"name"`
 	Notes     string    `datastore:"notes,noindex"`
+	Count     int64     `datastore:"count"`
+	Score     float64   `datastore:"score"`
+	Active    bool      `datastore:"active"`
 }
 
 func TestNewClient(t *testing.T) {
@@ -707,15 +707,15 @@ func TestEntityWithAllTypes(t *testing.T) {
 	ctx := context.Background()
 
 	type AllTypes struct {
-		StringVal  string    `datastore:"str"`
-		Int64Val   int64     `datastore:"i64"`
-		Int32Val   int32     `datastore:"i32"`
-		IntVal     int       `datastore:"i"`
-		BoolVal    bool      `datastore:"b"`
-		Float64Val float64   `datastore:"f64"`
 		TimeVal    time.Time `datastore:"t"`
+		StringVal  string    `datastore:"str"`
 		NoIndex    string    `datastore:"noindex,noindex"`
 		Skip       string    `datastore:"-"`
+		Int64Val   int64     `datastore:"i64"`
+		IntVal     int       `datastore:"i"`
+		Float64Val float64   `datastore:"f64"`
+		Int32Val   int32     `datastore:"i32"`
+		BoolVal    bool      `datastore:"b"`
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -1042,9 +1042,9 @@ func TestEntityWithSkippedFields(t *testing.T) {
 
 	type EntityWithSkip struct {
 		Name    string `datastore:"name"`
-		Count   int64  `datastore:"count"`
-		Skipped string `datastore:"-"` // Should not be stored
-		private string // Should not be stored (unexported)
+		Skipped string `datastore:"-"`
+		private string
+		Count   int64 `datastore:"count"`
 	}
 
 	key := ds9.NameKey("TestKind", "skip", nil)
@@ -2425,14 +2425,14 @@ func TestDecodeValueEdgeCases(t *testing.T) {
 
 	// Test with all basic types
 	type ComplexEntity struct {
+		Time    time.Time `datastore:"t"`
 		String  string    `datastore:"s"`
+		NoIndex string    `datastore:"n,noindex"`
 		Int     int       `datastore:"i"`
-		Int32   int32     `datastore:"i32"`
 		Int64   int64     `datastore:"i64"`
 		Float   float64   `datastore:"f"`
+		Int32   int32     `datastore:"i32"`
 		Bool    bool      `datastore:"b"`
-		Time    time.Time `datastore:"t"`
-		NoIndex string    `datastore:"n,noindex"`
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -3639,8 +3639,8 @@ func TestPutWithInvalidEntityStructure(t *testing.T) {
 
 	// Entity with channel (unsupported type)
 	type BadEntity struct {
-		Name string
 		Ch   chan int
+		Name string
 	}
 
 	key := ds9.NameKey("Test", "bad", nil)
@@ -4299,8 +4299,8 @@ func TestPutMultiWithPartialEncode(t *testing.T) {
 
 	// Mix of valid and invalid entities
 	type MixedEntity struct {
+		Data any
 		Name string
-		Data any // interface{} - may cause encoding issues
 	}
 
 	keys := []*ds9.Key{

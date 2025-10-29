@@ -41,13 +41,13 @@ func TestSetMetadataURL(t *testing.T) {
 
 func TestAccessTokenFromMetadata(t *testing.T) {
 	tests := []struct {
-		name           string
-		statusCode     int
 		response       any
-		wantErr        bool
+		name           string
 		wantToken      string
 		errContains    string
 		metadataFlavor string
+		statusCode     int
+		wantErr        bool
 	}{
 		{
 			name:       "success",
@@ -214,12 +214,12 @@ func TestAccessTokenFromADC(t *testing.T) {
 	defer tokenServer.Close()
 
 	tests := []struct {
+		setupEnv    func()
 		name        string
 		credsData   string
-		setupEnv    func()
-		wantErr     bool
 		errContains string
 		wantToken   string
+		wantErr     bool
 	}{
 		{
 			name: "success with valid credentials",
@@ -310,11 +310,11 @@ func TestAccessTokenFromADC(t *testing.T) {
 func TestProjectID(t *testing.T) {
 	tests := []struct {
 		name        string
-		statusCode  int
 		response    string
-		wantErr     bool
 		wantProject string
 		errContains string
+		statusCode  int
+		wantErr     bool
 	}{
 		{
 			name:        "success",
@@ -414,10 +414,10 @@ func TestProjectIDMetadataServerDown(t *testing.T) {
 func TestExchangeRefreshTokenErrors(t *testing.T) {
 	tests := []struct {
 		name        string
-		statusCode  int
 		response    string
-		wantErr     bool
 		errContains string
+		statusCode  int
+		wantErr     bool
 	}{
 		{
 			name:        "unauthorized",
