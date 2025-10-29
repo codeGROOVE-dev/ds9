@@ -268,6 +268,166 @@ func DecodeKey(encoded string) (*Key, error) {
 	return key, nil
 }
 
+// Cursor represents a query cursor for pagination.
+// API compatible with cloud.google.com/go/datastore.
+type Cursor string
+
+// String returns the cursor as a string.
+func (c Cursor) String() string {
+	return string(c)
+}
+
+// DecodeCursor decodes a cursor string.
+// API compatible with cloud.google.com/go/datastore.
+func DecodeCursor(s string) (Cursor, error) {
+	if s == "" {
+		return "", errors.New("empty cursor string")
+	}
+	return Cursor(s), nil
+}
+
+// Iterator is an iterator for query results.
+// API compatible with cloud.google.com/go/datastore.
+type Iterator struct {
+	ctx       context.Context //nolint:containedctx // Required for API compatibility with cloud.google.com/go/datastore
+	client    *Client
+	query     *Query
+	results   []iteratorResult
+	index     int
+	err       error
+	cursor    Cursor
+	fetchNext bool
+}
+
+type iteratorResult struct {
+	key    *Key
+	entity map[string]any
+	cursor Cursor
+}
+
+// Next advances the iterator and returns the next key and destination.
+// It returns Done when no more results are available.
+// API compatible with cloud.google.com/go/datastore.
+func (it *Iterator) Next(dst any) (*Key, error) {
+	// Check if we need to fetch more results
+	if it.index >= len(it.results) {
+		if it.err != nil {
+			return nil, it.err
+		}
+		if !it.fetchNext {
+			return nil, ErrDone
+		}
+
+		// Fetch next batch
+		if err := it.fetch(); err != nil {
+			it.err = err
+			return nil, err
+		}
+
+		if len(it.results) == 0 {
+			return nil, ErrDone
+		}
+	}
+
+	result := it.results[it.index]
+	it.index++
+	it.cursor = result.cursor
+
+	// Decode entity into dst
+	if err := decodeEntity(result.entity, dst); err != nil {
+		return nil, err
+	}
+
+	return result.key, nil
+}
+
+// Cursor returns the cursor for the iterator's current position.
+// API compatible with cloud.google.com/go/datastore.
+func (it *Iterator) Cursor() (Cursor, error) {
+	if it.cursor == "" {
+		return "", errors.New("no cursor available")
+	}
+	return it.cursor, nil
+}
+
+// fetch retrieves the next batch of results.
+func (it *Iterator) fetch() error {
+	token, err := auth.AccessToken(it.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Build query with current cursor as start
+	q := *it.query
+	if it.cursor != "" {
+		q.startCursor = it.cursor
+	}
+
+	queryObj := buildQueryMap(&q)
+	reqBody := map[string]any{"query": queryObj}
+	if it.client.databaseID != "" {
+		reqBody["databaseId"] = it.client.databaseID
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(it.client.projectID))
+	body, err := doRequest(it.ctx, it.client.logger, reqURL, jsonData, token, it.client.projectID, it.client.databaseID)
+	if err != nil {
+		return err
+	}
+
+	var result struct {
+		Batch struct {
+			EntityResults []struct {
+				Entity map[string]any `json:"entity"`
+				Cursor string         `json:"cursor"`
+			} `json:"entityResults"`
+			MoreResults    string `json:"moreResults"`
+			EndCursor      string `json:"endCursor"`
+			SkippedResults int    `json:"skippedResults"`
+		} `json:"batch"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Convert results to iterator format
+	it.results = make([]iteratorResult, 0, len(result.Batch.EntityResults))
+	for _, er := range result.Batch.EntityResults {
+		key, err := keyFromJSON(er.Entity["key"])
+		if err != nil {
+			return err
+		}
+
+		it.results = append(it.results, iteratorResult{
+			key:    key,
+			entity: er.Entity,
+			cursor: Cursor(er.Cursor),
+		})
+	}
+
+	it.index = 0
+
+	// Check if there are more results
+	moreResults := result.Batch.MoreResults
+	it.fetchNext = moreResults == "NOT_FINISHED" || moreResults == "MORE_RESULTS_AFTER_LIMIT" || moreResults == "MORE_RESULTS_AFTER_CURSOR"
+
+	if result.Batch.EndCursor != "" {
+		it.cursor = Cursor(result.Batch.EndCursor)
+	}
+
+	return nil
+}
+
+// ErrDone is returned by Iterator.Next when no more results are available.
+var ErrDone = errors.New("datastore: no more results")
+
 // doRequest performs an HTTP request with exponential backoff retries.
 // Returns an error if the status code is not 200 OK.
 func doRequest(ctx context.Context, logger *slog.Logger, url string, jsonData []byte, token, projectID, databaseID string) ([]byte, error) {
@@ -773,6 +933,95 @@ func (c *Client) DeleteAllByKind(ctx context.Context, kind string) error {
 	return nil
 }
 
+// AllocateIDs allocates IDs for incomplete keys.
+// Returns keys with IDs filled in. Complete keys are returned unchanged.
+// API compatible with cloud.google.com/go/datastore.
+func (c *Client) AllocateIDs(ctx context.Context, keys []*Key) ([]*Key, error) {
+	if len(keys) == 0 {
+		return keys, nil
+	}
+
+	c.logger.DebugContext(ctx, "allocating IDs", "count", len(keys))
+
+	// Separate incomplete and complete keys
+	var incompleteKeys []*Key
+	var incompleteIndices []int
+	for i, key := range keys {
+		if key != nil && key.Incomplete() {
+			incompleteKeys = append(incompleteKeys, key)
+			incompleteIndices = append(incompleteIndices, i)
+		}
+	}
+
+	// If no incomplete keys, return original slice
+	if len(incompleteKeys) == 0 {
+		c.logger.DebugContext(ctx, "no incomplete keys to allocate")
+		return keys, nil
+	}
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Build request with incomplete keys
+	reqKeys := make([]map[string]any, len(incompleteKeys))
+	for i, key := range incompleteKeys {
+		reqKeys[i] = keyToJSON(key)
+	}
+
+	reqBody := map[string]any{
+		"keys": reqKeys,
+	}
+	if c.databaseID != "" {
+		reqBody["databaseId"] = c.databaseID
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:allocateIds", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "allocateIds request failed", "error", err)
+		return nil, err
+	}
+
+	var resp struct {
+		Keys []map[string]any `json:"keys"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
+		return nil, fmt.Errorf("failed to parse allocateIds response: %w", err)
+	}
+
+	// Parse allocated keys
+	allocatedKeys := make([]*Key, len(resp.Keys))
+	for i, keyData := range resp.Keys {
+		key, err := keyFromJSON(keyData)
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to parse allocated key", "index", i, "error", err)
+			return nil, fmt.Errorf("failed to parse allocated key at index %d: %w", i, err)
+		}
+		allocatedKeys[i] = key
+	}
+
+	// Create result slice with allocated keys in correct positions
+	result := make([]*Key, len(keys))
+	copy(result, keys)
+	for i, idx := range incompleteIndices {
+		result[idx] = allocatedKeys[i]
+	}
+
+	c.logger.DebugContext(ctx, "IDs allocated successfully", "count", len(allocatedKeys))
+	return result, nil
+}
+
 // keyToJSON converts a Key to its JSON representation.
 // Supports hierarchical keys with parent relationships.
 func keyToJSON(key *Key) map[string]any {
@@ -887,7 +1136,57 @@ func encodeValue(v any) (any, error) {
 		return map[string]any{"doubleValue": val}, nil
 	case time.Time:
 		return map[string]any{"timestampValue": val.Format(time.RFC3339Nano)}, nil
+	case []string:
+		values := make([]map[string]any, len(val))
+		for i, s := range val {
+			values[i] = map[string]any{"stringValue": s}
+		}
+		return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
+	case []int64:
+		values := make([]map[string]any, len(val))
+		for i, n := range val {
+			values[i] = map[string]any{"integerValue": strconv.FormatInt(n, 10)}
+		}
+		return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
+	case []int:
+		values := make([]map[string]any, len(val))
+		for i, n := range val {
+			values[i] = map[string]any{"integerValue": strconv.Itoa(n)}
+		}
+		return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
+	case []float64:
+		values := make([]map[string]any, len(val))
+		for i, f := range val {
+			values[i] = map[string]any{"doubleValue": f}
+		}
+		return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
+	case []bool:
+		values := make([]map[string]any, len(val))
+		for i, b := range val {
+			values[i] = map[string]any{"booleanValue": b}
+		}
+		return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
 	default:
+		// Try to handle slices/arrays via reflection
+		rv := reflect.ValueOf(v)
+		if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
+			length := rv.Len()
+			values := make([]map[string]any, length)
+			for i := 0; i < length; i++ {
+				elem := rv.Index(i).Interface()
+				encodedElem, err := encodeValue(elem)
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode array element %d: %w", i, err)
+				}
+				// encodedElem is already a map[string]any with the type wrapper
+				if m, ok := encodedElem.(map[string]any); ok {
+					values[i] = m
+				} else {
+					return nil, fmt.Errorf("unexpected encoded value type for element %d", i)
+				}
+			}
+			return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
+		}
 		return nil, fmt.Errorf("unsupported type: %T", v)
 	}
 }
@@ -1008,6 +1307,48 @@ func decodeValue(prop map[string]any, dst reflect.Value) error {
 		}
 	}
 
+	if val, ok := prop["arrayValue"]; ok {
+		if dst.Kind() != reflect.Slice {
+			return fmt.Errorf("cannot decode array into non-slice type: %s", dst.Type())
+		}
+
+		arrayMap, ok := val.(map[string]any)
+		if !ok {
+			return errors.New("invalid arrayValue format")
+		}
+
+		valuesAny, ok := arrayMap["values"]
+		if !ok {
+			// Empty array
+			dst.Set(reflect.MakeSlice(dst.Type(), 0, 0))
+			return nil
+		}
+
+		values, ok := valuesAny.([]any)
+		if !ok {
+			return errors.New("invalid arrayValue.values format")
+		}
+
+		// Create slice with appropriate capacity
+		slice := reflect.MakeSlice(dst.Type(), len(values), len(values))
+
+		// Decode each element
+		for i, elemAny := range values {
+			elemMap, ok := elemAny.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid array element %d format", i)
+			}
+
+			elemValue := slice.Index(i)
+			if err := decodeValue(elemMap, elemValue); err != nil {
+				return fmt.Errorf("failed to decode array element %d: %w", i, err)
+			}
+		}
+
+		dst.Set(slice)
+		return nil
+	}
+
 	if _, ok := prop["nullValue"]; ok {
 		// Set to zero value
 		dst.Set(reflect.Zero(dst.Type()))
@@ -1019,14 +1360,18 @@ func decodeValue(prop map[string]any, dst reflect.Value) error {
 
 // Query represents a Datastore query.
 type Query struct {
-	ancestor   *Key
-	kind       string
-	filters    []queryFilter
-	orders     []queryOrder
-	projection []string
-	limit      int
-	offset     int
-	keysOnly   bool
+	ancestor    *Key
+	kind        string
+	filters     []queryFilter
+	orders      []queryOrder
+	projection  []string
+	distinctOn  []string
+	namespace   string
+	startCursor Cursor
+	endCursor   Cursor
+	limit       int
+	offset      int
+	keysOnly    bool
 }
 
 type queryFilter struct {
@@ -1146,10 +1491,57 @@ func (q *Query) Project(fieldNames ...string) *Query {
 	return q
 }
 
+// Distinct marks the query to return only distinct results.
+// This is equivalent to DistinctOn with all projected fields.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Distinct() *Query {
+	// Distinct without fields means distinct on projection
+	// This will be handled in buildQueryMap
+	if len(q.projection) > 0 {
+		q.distinctOn = q.projection
+	}
+	return q
+}
+
+// DistinctOn returns a query that removes duplicates based on the given field names.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) DistinctOn(fieldNames ...string) *Query {
+	q.distinctOn = fieldNames
+	return q
+}
+
+// Namespace sets the namespace for the query.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Namespace(ns string) *Query {
+	q.namespace = ns
+	return q
+}
+
+// Start sets the starting cursor for the query results.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) Start(c Cursor) *Query {
+	q.startCursor = c
+	return q
+}
+
+// End sets the ending cursor for the query results.
+// API compatible with cloud.google.com/go/datastore.
+func (q *Query) End(c Cursor) *Query {
+	q.endCursor = c
+	return q
+}
+
 // buildQueryMap creates a Datastore API query map from a Query object.
 func buildQueryMap(query *Query) map[string]any {
 	queryMap := map[string]any{
 		"kind": []map[string]any{{"name": query.kind}},
+	}
+
+	// Add namespace via partition ID if specified
+	if query.namespace != "" {
+		queryMap["partitionId"] = map[string]any{
+			"namespaceId": query.namespace,
+		}
 	}
 
 	// Add filters
@@ -1237,6 +1629,17 @@ func buildQueryMap(query *Query) map[string]any {
 		queryMap["projection"] = []map[string]any{{"property": map[string]string{"name": "__key__"}}}
 	}
 
+	// Add distinct on
+	if len(query.distinctOn) > 0 {
+		var distinctFields []map[string]any
+		for _, field := range query.distinctOn {
+			distinctFields = append(distinctFields, map[string]any{
+				"property": map[string]string{"name": field},
+			})
+		}
+		queryMap["distinctOn"] = distinctFields
+	}
+
 	// Add limit
 	if query.limit > 0 {
 		queryMap["limit"] = query.limit
@@ -1245,6 +1648,14 @@ func buildQueryMap(query *Query) map[string]any {
 	// Add offset
 	if query.offset > 0 {
 		queryMap["offset"] = query.offset
+	}
+
+	// Add cursors
+	if query.startCursor != "" {
+		queryMap["startCursor"] = string(query.startCursor)
+	}
+	if query.endCursor != "" {
+		queryMap["endCursor"] = string(query.endCursor)
 	}
 
 	return queryMap
@@ -1394,6 +1805,287 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 
 	v.Elem().Set(slice)
 	c.logger.DebugContext(ctx, "query completed successfully", "kind", query.kind, "entities_found", len(keys))
+	return keys, nil
+}
+
+// Count returns the number of entities matching the query.
+// Deprecated: Use aggregation queries with RunAggregationQuery instead.
+// API compatible with cloud.google.com/go/datastore.
+func (c *Client) Count(ctx context.Context, q *Query) (int, error) {
+	c.logger.DebugContext(ctx, "counting entities", "kind", q.kind)
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return 0, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Build aggregation query with COUNT
+	queryObj := buildQueryMap(q)
+	aggregationQuery := map[string]any{
+		"aggregations": []map[string]any{
+			{
+				"alias": "total",
+				"count": map[string]any{},
+			},
+		},
+		"nestedQuery": queryObj,
+	}
+
+	reqBody := map[string]any{
+		"aggregationQuery": aggregationQuery,
+	}
+	if c.databaseID != "" {
+		reqBody["databaseId"] = c.databaseID
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+		return 0, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:runAggregationQuery", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "count query failed", "error", err, "kind", q.kind)
+		return 0, err
+	}
+
+	var result struct {
+		Batch struct {
+			AggregationResults []struct {
+				AggregateProperties map[string]struct {
+					IntegerValue string `json:"integerValue"`
+				} `json:"aggregateProperties"`
+			} `json:"aggregationResults"`
+		} `json:"batch"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
+		return 0, fmt.Errorf("failed to parse count response: %w", err)
+	}
+
+	if len(result.Batch.AggregationResults) == 0 {
+		c.logger.DebugContext(ctx, "no results returned", "kind", q.kind)
+		return 0, nil
+	}
+
+	// Extract count from total aggregation
+	countVal, ok := result.Batch.AggregationResults[0].AggregateProperties["total"]
+	if !ok {
+		c.logger.ErrorContext(ctx, "count not found in response")
+		return 0, errors.New("count not found in aggregation response")
+	}
+
+	count, err := strconv.Atoi(countVal.IntegerValue)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to parse count", "error", err, "value", countVal.IntegerValue)
+		return 0, fmt.Errorf("failed to parse count: %w", err)
+	}
+
+	c.logger.DebugContext(ctx, "count completed successfully", "kind", q.kind, "count", count)
+	return count, nil
+}
+
+// Run executes the query and returns an iterator for the results.
+// API compatible with cloud.google.com/go/datastore.
+func (c *Client) Run(ctx context.Context, q *Query) *Iterator {
+	return &Iterator{
+		ctx:       ctx,
+		client:    c,
+		query:     q,
+		fetchNext: true,
+	}
+}
+
+// MutationOp represents the type of mutation operation.
+type MutationOp string
+
+const (
+	// MutationInsert represents an insert operation.
+	MutationInsert MutationOp = "insert"
+	// MutationUpdate represents an update operation.
+	MutationUpdate MutationOp = "update"
+	// MutationUpsert represents an upsert operation.
+	MutationUpsert MutationOp = "upsert"
+	// MutationDelete represents a delete operation.
+	MutationDelete MutationOp = "delete"
+)
+
+// Mutation represents a pending datastore mutation.
+type Mutation struct {
+	op     MutationOp
+	key    *Key
+	entity any
+}
+
+// NewInsert creates an insert mutation.
+// API compatible with cloud.google.com/go/datastore.
+func NewInsert(k *Key, src any) *Mutation {
+	return &Mutation{
+		op:     MutationInsert,
+		key:    k,
+		entity: src,
+	}
+}
+
+// NewUpdate creates an update mutation.
+// API compatible with cloud.google.com/go/datastore.
+func NewUpdate(k *Key, src any) *Mutation {
+	return &Mutation{
+		op:     MutationUpdate,
+		key:    k,
+		entity: src,
+	}
+}
+
+// NewUpsert creates an upsert mutation.
+// API compatible with cloud.google.com/go/datastore.
+func NewUpsert(k *Key, src any) *Mutation {
+	return &Mutation{
+		op:     MutationUpsert,
+		key:    k,
+		entity: src,
+	}
+}
+
+// NewDelete creates a delete mutation.
+// API compatible with cloud.google.com/go/datastore.
+func NewDelete(k *Key) *Mutation {
+	return &Mutation{
+		op:  MutationDelete,
+		key: k,
+	}
+}
+
+// Mutate applies one or more mutations atomically.
+// API compatible with cloud.google.com/go/datastore.
+func (c *Client) Mutate(ctx context.Context, muts ...*Mutation) ([]*Key, error) {
+	if len(muts) == 0 {
+		return nil, nil
+	}
+
+	c.logger.DebugContext(ctx, "applying mutations", "count", len(muts))
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return nil, fmt.Errorf("failed to get access token: %w", err)
+	}
+
+	// Build mutations array
+	mutations := make([]map[string]any, 0, len(muts))
+	for i, mut := range muts {
+		if mut == nil {
+			c.logger.ErrorContext(ctx, "nil mutation", "index", i)
+			return nil, fmt.Errorf("mutation at index %d is nil", i)
+		}
+		if mut.key == nil {
+			c.logger.ErrorContext(ctx, "nil key in mutation", "index", i)
+			return nil, fmt.Errorf("mutation at index %d has nil key", i)
+		}
+
+		mutMap := make(map[string]any)
+
+		switch mut.op {
+		case MutationInsert:
+			if mut.entity == nil {
+				c.logger.ErrorContext(ctx, "nil entity for insert", "index", i)
+				return nil, fmt.Errorf("insert mutation at index %d has nil entity", i)
+			}
+			entity, err := encodeEntity(mut.key, mut.entity)
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to encode entity", "index", i, "error", err)
+				return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			}
+			mutMap["insert"] = entity
+
+		case MutationUpdate:
+			if mut.entity == nil {
+				c.logger.ErrorContext(ctx, "nil entity for update", "index", i)
+				return nil, fmt.Errorf("update mutation at index %d has nil entity", i)
+			}
+			entity, err := encodeEntity(mut.key, mut.entity)
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to encode entity", "index", i, "error", err)
+				return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			}
+			mutMap["update"] = entity
+
+		case MutationUpsert:
+			if mut.entity == nil {
+				c.logger.ErrorContext(ctx, "nil entity for upsert", "index", i)
+				return nil, fmt.Errorf("upsert mutation at index %d has nil entity", i)
+			}
+			entity, err := encodeEntity(mut.key, mut.entity)
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to encode entity", "index", i, "error", err)
+				return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			}
+			mutMap["upsert"] = entity
+
+		case MutationDelete:
+			mutMap["delete"] = keyToJSON(mut.key)
+
+		default:
+			c.logger.ErrorContext(ctx, "unknown mutation operation", "index", i, "op", mut.op)
+			return nil, fmt.Errorf("unknown mutation operation at index %d: %s", i, mut.op)
+		}
+
+		mutations = append(mutations, mutMap)
+	}
+
+	reqBody := map[string]any{
+		"mutations": mutations,
+	}
+	if c.databaseID != "" {
+		reqBody["databaseId"] = c.databaseID
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// URL-encode project ID to prevent injection attacks
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "mutate request failed", "error", err)
+		return nil, err
+	}
+
+	var resp struct {
+		MutationResults []struct {
+			Key map[string]any `json:"key"`
+		} `json:"mutationResults"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
+		return nil, fmt.Errorf("failed to parse mutate response: %w", err)
+	}
+
+	// Extract resulting keys
+	keys := make([]*Key, len(resp.MutationResults))
+	for i, result := range resp.MutationResults {
+		if result.Key != nil {
+			key, err := keyFromJSON(result.Key)
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to parse key", "index", i, "error", err)
+				return nil, fmt.Errorf("failed to parse key at index %d: %w", i, err)
+			}
+			keys[i] = key
+		} else {
+			// For deletes, use the original key
+			keys[i] = muts[i].key
+		}
+	}
+
+	c.logger.DebugContext(ctx, "mutations applied successfully", "count", len(keys))
 	return keys, nil
 }
 
@@ -1949,6 +2641,79 @@ func (tx *Transaction) Rollback() error {
 	// So we just need to clear the mutations to prevent accidental commit
 	tx.mutations = nil
 	return nil
+}
+
+// Mutate adds one or more mutations to the transaction.
+// API compatible with cloud.google.com/go/datastore.
+func (tx *Transaction) Mutate(muts ...*Mutation) ([]*PendingKey, error) {
+	if len(muts) == 0 {
+		return nil, nil
+	}
+
+	// Build mutations array
+	pendingKeys := make([]*PendingKey, 0, len(muts))
+	for i, mut := range muts {
+		if mut == nil {
+			return nil, fmt.Errorf("mutation at index %d is nil", i)
+		}
+		if mut.key == nil {
+			return nil, fmt.Errorf("mutation at index %d has nil key", i)
+		}
+
+		mutMap := make(map[string]any)
+
+		switch mut.op {
+		case MutationInsert:
+			if mut.entity == nil {
+				return nil, fmt.Errorf("insert mutation at index %d has nil entity", i)
+			}
+			entity, err := encodeEntity(mut.key, mut.entity)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			}
+			mutMap["insert"] = entity
+
+		case MutationUpdate:
+			if mut.entity == nil {
+				return nil, fmt.Errorf("update mutation at index %d has nil entity", i)
+			}
+			entity, err := encodeEntity(mut.key, mut.entity)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			}
+			mutMap["update"] = entity
+
+		case MutationUpsert:
+			if mut.entity == nil {
+				return nil, fmt.Errorf("upsert mutation at index %d has nil entity", i)
+			}
+			entity, err := encodeEntity(mut.key, mut.entity)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			}
+			mutMap["upsert"] = entity
+
+		case MutationDelete:
+			mutMap["delete"] = keyToJSON(mut.key)
+
+		default:
+			return nil, fmt.Errorf("unknown mutation operation at index %d: %s", i, mut.op)
+		}
+
+		tx.mutations = append(tx.mutations, mutMap)
+
+		// Create a pending key for the result
+		pk := &PendingKey{key: mut.key}
+		pendingKeys = append(pendingKeys, pk)
+	}
+
+	return pendingKeys, nil
+}
+
+// PendingKey represents a key that will be resolved after a transaction commit.
+// API compatible with cloud.google.com/go/datastore.
+type PendingKey struct {
+	key *Key
 }
 
 // commit commits the transaction.

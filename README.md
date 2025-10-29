@@ -21,7 +21,14 @@ client.Put(ctx, key, &task)
 client.Get(ctx, key, &task)
 ```
 
-**Supported:** Get, Put, Delete, GetMulti, PutMulti, DeleteMulti, RunInTransaction, NewTransaction, Commit, Rollback, AllKeys, Query (Filter, Order, Offset, Ancestor, Project), NameKey, IDKey, IncompleteKey, parent keys.
+**Supported:**
+- **CRUD**: Get, Put, Delete, GetMulti, PutMulti, DeleteMulti
+- **Transactions**: RunInTransaction, NewTransaction, Commit, Rollback
+- **Queries**: Filter, Order, Limit, Offset, Ancestor, Project, Distinct, DistinctOn, Namespace, Run (iterator), Count
+- **Cursors**: Start, End, DecodeCursor
+- **Keys**: NameKey, IDKey, IncompleteKey, AllocateIDs, parent keys
+- **Mutations**: NewInsert, NewUpdate, NewUpsert, NewDelete, Mutate
+- **Types**: string, int, int64, int32, bool, float64, time.Time, slices ([]string, []int64, []int, []float64, []bool)
 
 ## Migrating from Official Client
 
@@ -35,6 +42,6 @@ Use `ds9mock` package for in-memory testing. See [TESTING.md](TESTING.md) for in
 
 ## Limitations
 
-Not supported: cursors, slices/arrays, embedded structs, automatic key allocation, some advanced query features.
+Not supported: embedded structs, nested slices, map types, some advanced query features (streaming aggregations, OR filters).
 
 See [example/](example/) for usage. Apache 2.0 licensed.
