@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeGROOVE-dev/ds9"
-	"github.com/codeGROOVE-dev/ds9/ds9mock"
+	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
 const (
@@ -26,13 +25,13 @@ func testProject() string {
 
 // integrationClient returns either a real GCP client or a mock client
 // based on whether DS9_TEST_PROJECT is set.
-func integrationClient(t *testing.T) (client *ds9.Client, cleanup func()) {
+func integrationClient(t *testing.T) (client *datastore.Client, cleanup func()) {
 	t.Helper()
 
 	if os.Getenv("DS9_TEST_PROJECT") != "" {
 		// Real GCP integration test
 		ctx := context.Background()
-		client, err := ds9.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
+		client, err := datastore.NewClientWithDatabase(ctx, testProject(), testDatabaseID)
 		if err != nil {
 			t.Fatalf("Failed to create GCP client: %v", err)
 		}
@@ -40,7 +39,7 @@ func integrationClient(t *testing.T) (client *ds9.Client, cleanup func()) {
 	}
 
 	// Mock client for unit testing
-	return ds9mock.NewClient(t)
+	return datastore.NewMockClient(t)
 }
 
 func TestIntegrationBasicOperations(t *testing.T) {
@@ -51,7 +50,7 @@ func TestIntegrationBasicOperations(t *testing.T) {
 
 	// Generate unique key for this test run
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
-	key := ds9.NameKey(testKind, testID, nil)
+	key := datastore.NameKey(testKind, testID, nil)
 
 	// Cleanup at the end
 	defer func() {
@@ -120,8 +119,8 @@ func TestIntegrationBasicOperations(t *testing.T) {
 
 		var entity integrationEntity
 		err = client.Get(ctx, key, &entity)
-		if !errors.Is(err, ds9.ErrNoSuchEntity) {
-			t.Errorf("expected ErrNoSuchEntity after delete, got %v", err)
+		if !errors.Is(err, datastore.ErrNoSuchEntity) {
+			t.Errorf("expected datastore.ErrNoSuchEntity after delete, got %v", err)
 		}
 	})
 }
@@ -134,10 +133,10 @@ func TestIntegrationBatchOperations(t *testing.T) {
 
 	// Generate unique keys for this test run
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
-	keys := []*ds9.Key{
-		ds9.NameKey(testKind, testID+"-1", nil),
-		ds9.NameKey(testKind, testID+"-2", nil),
-		ds9.NameKey(testKind, testID+"-3", nil),
+	keys := []*datastore.Key{
+		datastore.NameKey(testKind, testID+"-1", nil),
+		datastore.NameKey(testKind, testID+"-2", nil),
+		datastore.NameKey(testKind, testID+"-3", nil),
 	}
 
 	// Cleanup at the end
@@ -187,8 +186,8 @@ func TestIntegrationBatchOperations(t *testing.T) {
 
 		var retrieved []integrationEntity
 		err = client.GetMulti(ctx, keys, &retrieved)
-		if !errors.Is(err, ds9.ErrNoSuchEntity) {
-			t.Errorf("expected ErrNoSuchEntity after DeleteMulti, got %v", err)
+		if !errors.Is(err, datastore.ErrNoSuchEntity) {
+			t.Errorf("expected datastore.ErrNoSuchEntity after DeleteMulti, got %v", err)
 		}
 	})
 }
@@ -200,7 +199,7 @@ func TestIntegrationTransaction(t *testing.T) {
 	ctx := context.Background()
 
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
-	key := ds9.NameKey(testKind, testID, nil)
+	key := datastore.NameKey(testKind, testID, nil)
 
 	defer func() {
 		if err := client.Delete(ctx, key); err != nil {
@@ -210,7 +209,7 @@ func TestIntegrationTransaction(t *testing.T) {
 
 	t.Run("Transaction", func(t *testing.T) {
 		// Create entity inside transaction to avoid contention with non-transactional operations
-		_, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		_, err := client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
 			// Create new entity inside transaction
 			initial := &integrationEntity{
 				Name:      "counter",
@@ -225,7 +224,7 @@ func TestIntegrationTransaction(t *testing.T) {
 		}
 
 		// Now run another transaction to update it
-		_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+		_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
 			var entity integrationEntity
 			if err := tx.Get(key, &entity); err != nil {
 				return err
@@ -260,10 +259,10 @@ func TestIntegrationQuery(t *testing.T) {
 
 	// Create test entities
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
-	keys := make([]*ds9.Key, 5)
+	keys := make([]*datastore.Key, 5)
 	entities := make([]integrationEntity, 5)
 	for i := range 5 {
-		keys[i] = ds9.NameKey(testKind, testID+"-"+string(rune('a'+i)), nil)
+		keys[i] = datastore.NameKey(testKind, testID+"-"+string(rune('a'+i)), nil)
 		entities[i] = integrationEntity{
 			Name:      "query-test",
 			Count:     int64(i),
@@ -283,10 +282,10 @@ func TestIntegrationQuery(t *testing.T) {
 	}()
 
 	t.Run("AllKeys", func(t *testing.T) {
-		query := ds9.NewQuery(testKind).KeysOnly().Limit(10)
+		query := datastore.NewQuery(testKind).KeysOnly().Limit(10)
 		resultKeys, err := client.AllKeys(ctx, query)
 		if err != nil {
-			t.Fatalf("AllKeys failed: %v", err)
+			t.Fatalf("datastore.AllKeys failed: %v", err)
 		}
 
 		// We expect at least our 5 keys (there might be more from other tests)
@@ -319,9 +318,9 @@ func TestIntegrationCleanup(t *testing.T) {
 
 	// First create some test entities
 	testID := t.Name() + "-" + time.Now().Format("20060102-150405.000000")
-	keys := []*ds9.Key{
-		ds9.NameKey(testKind, testID+"-1", nil),
-		ds9.NameKey(testKind, testID+"-2", nil),
+	keys := []*datastore.Key{
+		datastore.NameKey(testKind, testID+"-1", nil),
+		datastore.NameKey(testKind, testID+"-2", nil),
 	}
 	entities := []integrationEntity{
 		{Name: "cleanup-1", Count: 1, Timestamp: time.Now().UTC().Truncate(time.Microsecond)},
@@ -341,7 +340,7 @@ func TestIntegrationCleanup(t *testing.T) {
 		}
 
 		// Verify all entities are deleted
-		q := ds9.NewQuery(testKind).KeysOnly()
+		q := datastore.NewQuery(testKind).KeysOnly()
 		keys, err := client.AllKeys(ctx, q)
 		if err != nil {
 			t.Fatalf("Failed to query after cleanup: %v", err)
@@ -371,11 +370,11 @@ func TestIntegrationGetAll(t *testing.T) {
 		// Setup: Create test entities
 		kind := "DS9GetAllTest"
 		count := 5
-		keys := make([]*ds9.Key, count)
+		keys := make([]*datastore.Key, count)
 		entities := make([]integrationEntity, count)
 
 		for i := range count {
-			keys[i] = ds9.IDKey(kind, int64(i+1000), nil) // Use IDs to avoid conflicts
+			keys[i] = datastore.IDKey(kind, int64(i+1000), nil) // Use IDs to avoid conflicts
 			entities[i] = integrationEntity{
 				Name:      "getall-entity-" + string(rune('A'+i)),
 				Count:     int64(i * 100),
@@ -390,11 +389,11 @@ func TestIntegrationGetAll(t *testing.T) {
 		}
 
 		// Test GetAll
-		query := ds9.NewQuery(kind)
+		query := datastore.NewQuery(kind)
 		var results []integrationEntity
 		returnedKeys, err := client.GetAll(ctx, query, &results)
 		if err != nil {
-			t.Fatalf("GetAll failed: %v", err)
+			t.Fatalf("datastore.GetAll failed: %v", err)
 		}
 
 		if len(results) < count {
@@ -427,11 +426,11 @@ func TestIntegrationGetAll(t *testing.T) {
 	t.Run("GetAllWithLimit", func(t *testing.T) {
 		kind := "DS9GetAllLimitTest"
 		// Create 10 entities
-		keys := make([]*ds9.Key, 10)
+		keys := make([]*datastore.Key, 10)
 		entities := make([]integrationEntity, 10)
 
 		for i := range 10 {
-			keys[i] = ds9.IDKey(kind, int64(i+2000), nil)
+			keys[i] = datastore.IDKey(kind, int64(i+2000), nil)
 			entities[i] = integrationEntity{
 				Name:      "limit-test-" + string(rune('0'+i)),
 				Count:     int64(i),
@@ -445,11 +444,11 @@ func TestIntegrationGetAll(t *testing.T) {
 		}
 
 		// Test GetAll with limit
-		query := ds9.NewQuery(kind).Limit(3)
+		query := datastore.NewQuery(kind).Limit(3)
 		var results []integrationEntity
 		returnedKeys, err := client.GetAll(ctx, query, &results)
 		if err != nil {
-			t.Fatalf("GetAll with limit failed: %v", err)
+			t.Fatalf("datastore.GetAll with limit failed: %v", err)
 		}
 
 		// Should get at most 3 results
@@ -470,12 +469,12 @@ func TestIntegrationGetAll(t *testing.T) {
 
 	t.Run("GetAllEmpty", func(t *testing.T) {
 		kind := "DS9NonExistentKind"
-		query := ds9.NewQuery(kind)
+		query := datastore.NewQuery(kind)
 		var results []integrationEntity
 
 		keys, err := client.GetAll(ctx, query, &results)
 		if err != nil {
-			t.Fatalf("GetAll on empty kind failed: %v", err)
+			t.Fatalf("datastore.GetAll on empty kind failed: %v", err)
 		}
 
 		if len(results) != 0 {
@@ -506,15 +505,15 @@ func TestIntegrationClose(t *testing.T) {
 	}
 }
 
-// TestIntegrationCommitReturn tests that RunInTransaction returns a Commit.
+// TestIntegrationCommitReturn tests that datastore.RunInTransaction returns a datastore.Commit.
 func TestIntegrationCommitReturn(t *testing.T) {
 	client, cleanup := integrationClient(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	key := ds9.IDKey("DS9CommitTest", 9999, nil)
+	key := datastore.IDKey("DS9CommitTest", 9999, nil)
 
-	commit, err := client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	commit, err := client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
 		entity := &integrationEntity{
 			Name:      "commit-test",
 			Count:     42,
@@ -524,11 +523,11 @@ func TestIntegrationCommitReturn(t *testing.T) {
 		return err
 	})
 	if err != nil {
-		t.Fatalf("RunInTransaction failed: %v", err)
+		t.Fatalf("datastore.RunInTransaction failed: %v", err)
 	}
 
 	if commit == nil {
-		t.Fatal("Expected non-nil Commit, got nil")
+		t.Fatal("Expected non-nil datastore.Commit, got nil")
 	}
 
 	// Verify entity was created

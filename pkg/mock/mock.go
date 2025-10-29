@@ -1,22 +1,23 @@
-// Package ds9mock provides an in-memory mock Datastore server for testing.
+// Package mock provides an in-memory mock Datastore server for testing.
 //
 // This package can be used by both ds9 internal tests and by end-users who want
 // to test their code that depends on ds9 without hitting real Datastore APIs.
 //
 // Example usage:
 //
+//	import "github.com/codeGROOVE-dev/ds9/pkg/datastore"
+//
 //	func TestMyCode(t *testing.T) {
-//	    client, cleanup := ds9mock.NewClient(t)
+//	    client, cleanup := datastore.NewMockClient(t)
 //	    defer cleanup()
 //
 //	    // Use client in your tests
-//	    key := ds9.NameKey("Task", "task-1", nil)
+//	    key := datastore.NameKey("Task", "task-1", nil)
 //	    _, err := client.Put(ctx, key, &myTask)
 //	}
-package ds9mock
+package mock
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -25,28 +26,31 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-
-	"github.com/codeGROOVE-dev/ds9"
 )
 
 const metadataFlavor = "Google"
 
 // Store holds the in-memory entity storage.
+//
+//nolint:govet // Field alignment not optimized to maintain readability
 type Store struct {
 	mu       sync.RWMutex
 	entities map[string]map[string]any
+	nextID   int64 // Counter for allocating unique IDs
 }
 
 // NewStore creates a new in-memory store.
 func NewStore() *Store {
 	return &Store{
 		entities: make(map[string]map[string]any),
+		nextID:   1000, // Start IDs at 1000
 	}
 }
 
-// NewClient creates a ds9 client connected to mock servers with in-memory storage.
-// Returns the client and a cleanup function that should be deferred.
-func NewClient(t *testing.T) (client *ds9.Client, cleanup func()) {
+// NewMockServers creates mock metadata and API servers for testing.
+// Returns the metadata URL, API URL, and a cleanup function.
+// This function doesn't import datastore to avoid import cycles.
+func NewMockServers(t *testing.T) (metadataURL, apiURL string, cleanup func()) {
 	t.Helper()
 
 	store := NewStore()
@@ -123,24 +127,12 @@ func NewClient(t *testing.T) (client *ds9.Client, cleanup func()) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 
-	// Set test URLs in ds9
-	restore := ds9.SetTestURLs(metadataServer.URL, apiServer.URL)
-
-	// Create client
-	ctx := context.Background()
-	var err error
-	client, err = ds9.NewClient(ctx, "test-project")
-	if err != nil {
-		t.Fatalf("failed to create mock client: %v", err)
-	}
-
 	cleanup = func() {
-		restore()
 		metadataServer.Close()
 		apiServer.Close()
 	}
 
-	return client, cleanup
+	return metadataServer.URL, apiServer.URL, cleanup
 }
 
 // handleLookup handles lookup (get) requests.
@@ -231,6 +223,8 @@ func (s *Store) handleLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCommit handles commit (put/delete) requests.
+//
+//nolint:gocognit,maintidx // Complex logic required for handling multiple mutation types
 func (s *Store) handleCommit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Mode       string           `json:"mode"`
@@ -468,11 +462,37 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		limit = int(l)
 	}
 
+	// Check for startCursor - if present, we've already returned results
+	// For simplicity in the mock, return empty results when cursor is used
+	var startCursor string
+	if sc, ok := query["startCursor"].(string); ok {
+		startCursor = sc
+	}
+
 	// Find all entities of this kind
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var results []any
+
+	// If there's a start cursor, we simulate pagination by returning no more results
+	// This is a simplified mock behavior - a real implementation would track position
+	if startCursor != "" {
+		// Return empty results to indicate end of pagination
+		response := map[string]any{
+			"batch": map[string]any{
+				"entityResults": []any{},
+				"moreResults":   "NO_MORE_RESULTS",
+			},
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			log.Printf("failed to encode query response: %v", err)
+		}
+		return
+	}
+
 	for _, entity := range s.entities {
 		keyData, ok := entity["key"].(map[string]any)
 		if !ok {
@@ -492,6 +512,13 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if entityKind == kind {
+			// Apply filters if present
+			if filterMap, hasFilter := query["filter"].(map[string]any); hasFilter {
+				if !matchesFilter(entity, filterMap) {
+					continue
+				}
+			}
+
 			results = append(results, map[string]any{
 				"entity": entity,
 			})
@@ -502,13 +529,33 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Add cursor if there are more results (for pagination testing)
+	var endCursor string
+	if limit > 0 && len(results) == limit {
+		// Generate a simple cursor to indicate more results might exist
+		endCursor = fmt.Sprintf("cursor-after-%d", limit)
+	}
+
+	// Build response
+	batch := map[string]any{
+		"entityResults": results,
+	}
+
+	// Add cursor if available
+	if endCursor != "" {
+		batch["endCursor"] = endCursor
+		batch["moreResults"] = "MORE_RESULTS_AFTER_LIMIT"
+	} else {
+		batch["moreResults"] = "NO_MORE_RESULTS"
+	}
+
+	response := map[string]any{
+		"batch": batch,
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{
-		"batch": map[string]any{
-			"entityResults": results,
-		},
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("failed to encode query response: %v", err)
 	}
 }
@@ -583,7 +630,10 @@ func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Allocate IDs for incomplete keys
+	// Allocate unique IDs for incomplete keys
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	allocatedKeys := make([]map[string]any, 0, len(req.Keys))
 	for _, keyData := range req.Keys {
 		// Parse path to check if incomplete
@@ -598,12 +648,13 @@ func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// If it has no name or id, allocate an ID
+		// If it has no name or id, allocate a unique ID
 		_, hasName := lastElem["name"]
 		_, hasID := lastElem["id"]
 		if !hasName && !hasID {
-			// Allocate a simple sequential ID
-			lastElem["id"] = "1001" // Simple mock ID
+			// Allocate a unique sequential ID
+			s.nextID++
+			lastElem["id"] = strconv.FormatInt(s.nextID, 10)
 		}
 
 		allocatedKeys = append(allocatedKeys, keyData)
@@ -619,6 +670,8 @@ func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
 }
 
 // matchesFilter checks if an entity matches a filter.
+//
+//nolint:gocognit,nestif // Complex logic required for proper filter evaluation with multiple types and operators
 func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 	// Handle propertyFilter
 	if propFilter, ok := filterMap["propertyFilter"].(map[string]any); ok {
@@ -702,6 +755,8 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 					return ev <= fv
 				}
 			}
+		default:
+			return false
 		}
 	}
 
@@ -716,7 +771,8 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 			return true
 		}
 
-		if op == "AND" {
+		switch op {
+		case "AND":
 			for _, f := range filters {
 				if fm, ok := f.(map[string]any); ok {
 					if !matchesFilter(entity, fm) {
@@ -725,7 +781,7 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 				}
 			}
 			return true
-		} else if op == "OR" {
+		case "OR":
 			for _, f := range filters {
 				if fm, ok := f.(map[string]any); ok {
 					if matchesFilter(entity, fm) {
@@ -734,6 +790,8 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 				}
 			}
 			return false
+		default:
+			return true
 		}
 	}
 

@@ -8,7 +8,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/codeGROOVE-dev/ds9"
+	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
 // Task represents a simple task entity.
@@ -25,7 +25,7 @@ func main() {
 
 	// Create a new Datastore client
 	// The project ID will be automatically detected from the GCP metadata server
-	client, err := ds9.NewClient(ctx, "my-project")
+	client, err := datastore.NewClient(ctx, "my-project")
 	if err != nil {
 		log.Fatalf("Failed to create client: %v", err)
 	}
@@ -39,7 +39,7 @@ func main() {
 		CreatedAt:   time.Now(),
 	}
 
-	key := ds9.NameKey("Task", "task-1", nil)
+	key := datastore.NameKey("Task", "task-1", nil)
 	_, err = client.Put(ctx, key, task)
 	if err != nil {
 		log.Fatalf("Failed to put task: %v", err)
@@ -63,7 +63,7 @@ func main() {
 	fmt.Println("Task updated successfully")
 
 	// Example 4: Query for all task keys
-	query := ds9.NewQuery("Task").KeysOnly().Limit(100)
+	query := datastore.NewQuery("Task").KeysOnly().Limit(100)
 	keys, err := client.AllKeys(ctx, query)
 	if err != nil {
 		log.Fatalf("Failed to query tasks: %v", err)
@@ -71,7 +71,7 @@ func main() {
 	fmt.Printf("Found %d tasks\n", len(keys))
 
 	// Example 5: Use a transaction
-	_, err = client.RunInTransaction(ctx, func(tx *ds9.Transaction) error {
+	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
 		var current Task
 		if err := tx.Get(key, &current); err != nil {
 			return err
@@ -97,7 +97,7 @@ func main() {
 
 	// Example 7: Check that entity is gone
 	err = client.Get(ctx, key, &retrieved)
-	if errors.Is(err, ds9.ErrNoSuchEntity) {
+	if errors.Is(err, datastore.ErrNoSuchEntity) {
 		fmt.Println("Confirmed: task no longer exists")
 	} else if err != nil {
 		log.Fatalf("Unexpected error: %v", err)

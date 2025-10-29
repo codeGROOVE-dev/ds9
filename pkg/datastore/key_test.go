@@ -1,4 +1,4 @@
-package ds9
+package datastore
 
 import (
 	"testing"
