@@ -70,6 +70,7 @@ func WithReadTime(t time.Time) TransactionOption {
 // The caller must call Commit or Rollback when done.
 // API compatible with cloud.google.com/go/datastore.
 func (c *Client) NewTransaction(ctx context.Context, opts ...TransactionOption) (*Transaction, error) {
+	ctx = c.withClientConfig(ctx)
 	settings := transactionSettings{
 		maxAttempts: 3, // default (not used for NewTransaction, but kept for consistency)
 	}
@@ -162,6 +163,7 @@ func (c *Client) NewTransaction(ctx context.Context, opts ...TransactionOption) 
 // The function should use the transaction's Get and Put methods.
 // API compatible with cloud.google.com/go/datastore.
 func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) error, opts ...TransactionOption) (*Commit, error) {
+	ctx = c.withClientConfig(ctx)
 	settings := transactionSettings{
 		maxAttempts: 3, // default
 	}

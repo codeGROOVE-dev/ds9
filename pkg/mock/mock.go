@@ -50,6 +50,8 @@ func NewStore() *Store {
 // NewMockServers creates mock metadata and API servers for testing.
 // Returns the metadata URL, API URL, and a cleanup function.
 // This function doesn't import datastore to avoid import cycles.
+//
+// For convenience, use datastore.NewMockClient() instead which handles all setup.
 func NewMockServers(t *testing.T) (metadataURL, apiURL string, cleanup func()) {
 	t.Helper()
 
@@ -800,7 +802,7 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 
 // handleRunAggregationQuery handles :runAggregationQuery requests.
 func (s *Store) handleRunAggregationQuery(w http.ResponseWriter, r *http.Request) {
-	var req struct {
+	var req struct { //nolint:govet // Local anonymous struct for JSON unmarshaling
 		DatabaseID       string         `json:"databaseId"`
 		AggregationQuery map[string]any `json:"aggregationQuery"`
 	}

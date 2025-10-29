@@ -112,7 +112,7 @@ func (it *Iterator) fetch() error {
 	}
 
 	var result struct {
-		Batch struct {
+		Batch struct { //nolint:govet // Local anonymous struct for JSON unmarshaling
 			EntityResults []struct {
 				Entity map[string]any `json:"entity"`
 				Cursor string         `json:"cursor"`

@@ -459,15 +459,13 @@ func TestGetWithDecodeError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	client, err := datastore.NewClient(context.Background(), "test-project")
+	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	ctx := context.Background()
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
@@ -557,15 +555,13 @@ func TestDecodeValueInvalidInteger(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	client, err := datastore.NewClient(context.Background(), "test-project")
+	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	ctx := context.Background()
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
@@ -635,15 +631,13 @@ func TestDecodeValueWrongTypeForInteger(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	client, err := datastore.NewClient(context.Background(), "test-project")
+	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	ctx := context.Background()
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
@@ -713,15 +707,13 @@ func TestDecodeValueInvalidTimestamp(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	client, err := datastore.NewClient(context.Background(), "test-project")
+	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	ctx := context.Background()
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
@@ -794,15 +786,13 @@ func TestGetMultiDecodeError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	client, err := datastore.NewClient(context.Background(), "test-project")
+	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	ctx := context.Background()
 	keys := []*datastore.Key{
 		datastore.NameKey("Test", "key1", nil),
 		datastore.NameKey("Test", "key2", nil),

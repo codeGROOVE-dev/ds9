@@ -99,11 +99,9 @@ func TestCountComprehensive(t *testing.T) {
 		count, err := client.Count(ctx, q)
 		if err != nil {
 			t.Logf("Count with multiple filters: %v (may not be supported)", err)
-		} else {
+		} else if count != 2 {
 			// Should count 2, 3 = 2 entities
-			if count != 2 {
-				t.Logf("Expected count 2 with multiple filters, got %d (composite filters may not be supported)", count)
-			}
+			t.Logf("Expected count 2 with multiple filters, got %d (composite filters may not be supported)", count)
 		}
 	})
 }
@@ -134,10 +132,8 @@ func TestGetAllComprehensive(t *testing.T) {
 		keys, err := client.GetAll(ctx, q, &entities)
 		if err != nil {
 			t.Logf("GetAll with order: %v (ordering may not be implemented)", err)
-		} else {
-			if len(keys) != 5 {
-				t.Errorf("Expected 5 keys, got %d", len(keys))
-			}
+		} else if len(keys) != 5 {
+			t.Errorf("Expected 5 keys, got %d", len(keys))
 		}
 	})
 
@@ -160,10 +156,8 @@ func TestGetAllComprehensive(t *testing.T) {
 		keys, err := client.GetAll(ctx, q, &entities)
 		if err != nil {
 			t.Logf("GetAll with offset: %v (offset may not be implemented)", err)
-		} else {
-			if len(keys) > 5 {
-				t.Errorf("Got too many keys: %d", len(keys))
-			}
+		} else if len(keys) > 5 {
+			t.Errorf("Got too many keys: %d", len(keys))
 		}
 	})
 
