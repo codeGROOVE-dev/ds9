@@ -32,6 +32,8 @@ import (
 const metadataFlavor = "Google"
 
 // Store holds the in-memory entity storage.
+//
+//nolint:govet // Field alignment not optimized to maintain readability
 type Store struct {
 	mu       sync.RWMutex
 	entities map[string]map[string]any
@@ -231,6 +233,8 @@ func (s *Store) handleLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCommit handles commit (put/delete) requests.
+//
+//nolint:gocognit,maintidx // Complex logic required for handling multiple mutation types
 func (s *Store) handleCommit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Mode       string           `json:"mode"`
@@ -553,7 +557,7 @@ func handleBeginTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAllocateIDs handles :allocateIds requests.
-func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
+func (*Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DatabaseID string           `json:"databaseId"`
 		Keys       []map[string]any `json:"keys"`
@@ -619,6 +623,8 @@ func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
 }
 
 // matchesFilter checks if an entity matches a filter.
+//
+//nolint:gocognit,nestif // Complex logic required for proper filter evaluation with multiple types and operators
 func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 	// Handle propertyFilter
 	if propFilter, ok := filterMap["propertyFilter"].(map[string]any); ok {
@@ -702,6 +708,8 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 					return ev <= fv
 				}
 			}
+		default:
+			return false
 		}
 	}
 
@@ -716,7 +724,8 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 			return true
 		}
 
-		if op == "AND" {
+		switch op {
+		case "AND":
 			for _, f := range filters {
 				if fm, ok := f.(map[string]any); ok {
 					if !matchesFilter(entity, fm) {
@@ -725,7 +734,7 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 				}
 			}
 			return true
-		} else if op == "OR" {
+		case "OR":
 			for _, f := range filters {
 				if fm, ok := f.(map[string]any); ok {
 					if matchesFilter(entity, fm) {
@@ -734,6 +743,8 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 				}
 			}
 			return false
+		default:
+			return true
 		}
 	}
 

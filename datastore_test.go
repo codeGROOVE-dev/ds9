@@ -8016,8 +8016,8 @@ func TestMutate(t *testing.T) {
 			t.Fatalf("Mutate with no mutations failed: %v", err)
 		}
 
-		if keys != nil && len(keys) != 0 {
-			t.Errorf("Expected nil or empty keys, got %d", len(keys))
+		if len(keys) != 0 {
+			t.Errorf("Expected empty keys, got %d", len(keys))
 		}
 	})
 }

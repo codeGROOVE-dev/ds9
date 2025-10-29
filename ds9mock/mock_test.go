@@ -351,3 +351,97 @@ func TestMockDeleteNonExistent(t *testing.T) {
 		t.Errorf("Delete of non-existent entity should not error, got: %v", err)
 	}
 }
+
+func TestMockConcurrentAccess(t *testing.T) {
+	client, cleanup := NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	type TestEntity struct {
+		Value int64 `datastore:"value"`
+	}
+
+	// Run concurrent operations to stress-test locking
+	const goroutines = 50
+	const operations = 100
+
+	done := make(chan bool)
+
+	for g := range goroutines {
+		go func(id int) {
+			defer func() { done <- true }()
+
+			for i := range operations {
+				key := ds9.NameKey("ConcurrentKind", string(rune('a'+id%10)), nil)
+				entity := &TestEntity{Value: int64(i)}
+
+				// Mix of reads and writes
+				if i%3 == 0 {
+					// Write
+					_, err := client.Put(ctx, key, entity)
+					if err != nil {
+						t.Errorf("goroutine %d: Put failed: %v", id, err)
+						return
+					}
+				} else {
+					// Read - may fail if entity doesn't exist, which is expected
+					var result TestEntity
+					client.Get(ctx, key, &result) //nolint:errcheck // Expected to fail when entity doesn't exist
+				}
+			}
+		}(g)
+	}
+
+	// Wait for all goroutines
+	for range goroutines {
+		<-done
+	}
+}
+
+func TestMockConcurrentQuery(t *testing.T) {
+	client, cleanup := NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	type TestEntity struct {
+		Name string `datastore:"name"`
+	}
+
+	// Populate some data
+	for i := range 20 {
+		key := ds9.NameKey("QueryConcurrent", string(rune('a'+i)), nil)
+		entity := &TestEntity{Name: "test"}
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	// Run concurrent queries
+	const goroutines = 20
+	done := make(chan bool)
+
+	for range goroutines {
+		go func() {
+			defer func() { done <- true }()
+
+			query := ds9.NewQuery("QueryConcurrent").KeysOnly()
+			keys, err := client.AllKeys(ctx, query)
+			if err != nil {
+				t.Errorf("AllKeys failed: %v", err)
+				return
+			}
+
+			if len(keys) != 20 {
+				t.Errorf("expected 20 keys, got %d", len(keys))
+			}
+		}()
+	}
+
+	// Wait for all goroutines
+	for range goroutines {
+		<-done
+	}
+}

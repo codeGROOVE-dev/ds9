@@ -3,6 +3,8 @@
 // It uses only the Go standard library and makes direct REST API calls
 // to the Datastore API. Authentication is handled via the GCP metadata
 // server when running on GCP, or via Application Default Credentials.
+//
+//nolint:revive // Public structs required for API compatibility with cloud.google.com/go/datastore
 package ds9
 
 import (
@@ -21,6 +23,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,8 +43,9 @@ var (
 	// ErrNoSuchEntity is returned when an entity is not found.
 	ErrNoSuchEntity = errors.New("datastore: no such entity")
 
-	// Package-level variable for easier testing.
-	apiURL = "https://datastore.googleapis.com/v1"
+	// atomicAPIURL stores the API URL for thread-safe access.
+	// Use getAPIURL() to read and setAPIURL() to write.
+	atomicAPIURL atomic.Pointer[string]
 
 	httpClient = &http.Client{
 		Timeout: defaultTimeout,
@@ -62,6 +66,22 @@ var (
 	}
 )
 
+//nolint:gochecknoinits // Required for thread-safe initialization of atomic pointer
+func init() {
+	defaultURL := "https://datastore.googleapis.com/v1"
+	atomicAPIURL.Store(&defaultURL)
+}
+
+// getAPIURL returns the current API URL in a thread-safe manner.
+func getAPIURL() string {
+	return *atomicAPIURL.Load()
+}
+
+// setAPIURL sets the API URL in a thread-safe manner.
+func setAPIURL(url string) {
+	atomicAPIURL.Store(&url)
+}
+
 // SetTestURLs configures custom metadata and API URLs for testing.
 // This is intended for use by testing packages like ds9mock.
 // Returns a function that restores the original URLs.
@@ -74,11 +94,11 @@ var (
 //	defer restore()
 func SetTestURLs(metadata, api string) (restore func()) {
 	// Auth package will log warning if called outside test environment
-	oldAPI := apiURL
-	apiURL = api
+	oldAPI := getAPIURL()
+	setAPIURL(api)
 	restoreAuth := auth.SetMetadataURL(metadata)
 	return func() {
-		apiURL = oldAPI
+		setAPIURL(oldAPI)
 		restoreAuth()
 	}
 }
@@ -88,6 +108,7 @@ type Client struct {
 	logger     *slog.Logger
 	projectID  string
 	databaseID string
+	baseURL    string // API base URL, defaults to production but can be overridden for testing
 }
 
 // NewClient creates a new Datastore client.
@@ -122,6 +143,7 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 	return &Client{
 		projectID:  projID,
 		databaseID: dbID,
+		baseURL:    getAPIURL(),
 		logger:     logger,
 	}, nil
 }
@@ -288,6 +310,8 @@ func DecodeCursor(s string) (Cursor, error) {
 
 // Iterator is an iterator for query results.
 // API compatible with cloud.google.com/go/datastore.
+//
+//nolint:govet // Field alignment optimized for API compatibility over memory layout
 type Iterator struct {
 	ctx       context.Context //nolint:containedctx // Required for API compatibility with cloud.google.com/go/datastore
 	client    *Client
@@ -375,7 +399,7 @@ func (it *Iterator) fetch() error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(it.client.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", it.client.baseURL, neturl.PathEscape(it.client.projectID))
 	body, err := doRequest(it.ctx, it.client.logger, reqURL, jsonData, token, it.client.projectID, it.client.databaseID)
 	if err != nil {
 		return err
@@ -567,7 +591,7 @@ func (c *Client) Get(ctx context.Context, key *Key, dst any) error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:lookup", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:lookup", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "lookup request failed", "error", err, "kind", key.Kind)
@@ -632,7 +656,7 @@ func (c *Client) Put(ctx context.Context, key *Key, src any) (*Key, error) {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
 	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "commit request failed", "error", err, "kind", key.Kind)
 		return nil, err
@@ -672,7 +696,7 @@ func (c *Client) Delete(ctx context.Context, key *Key) error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
 	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "delete request failed", "error", err, "kind", key.Kind)
 		return err
@@ -724,7 +748,7 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:lookup", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:lookup", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "lookup request failed", "error", err)
@@ -841,7 +865,7 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
 	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "commit request failed", "error", err)
 		return nil, err
@@ -895,7 +919,7 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
 	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
 		c.logger.ErrorContext(ctx, "delete request failed", "error", err)
 		return err
@@ -985,7 +1009,7 @@ func (c *Client) AllocateIDs(ctx context.Context, keys []*Key) ([]*Key, error) {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:allocateIds", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:allocateIds", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "allocateIds request failed", "error", err)
@@ -1172,18 +1196,18 @@ func encodeValue(v any) (any, error) {
 		if rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array {
 			length := rv.Len()
 			values := make([]map[string]any, length)
-			for i := 0; i < length; i++ {
+			for i := range length {
 				elem := rv.Index(i).Interface()
 				encodedElem, err := encodeValue(elem)
 				if err != nil {
 					return nil, fmt.Errorf("failed to encode array element %d: %w", i, err)
 				}
 				// encodedElem is already a map[string]any with the type wrapper
-				if m, ok := encodedElem.(map[string]any); ok {
-					values[i] = m
-				} else {
+				m, ok := encodedElem.(map[string]any)
+				if !ok {
 					return nil, fmt.Errorf("unexpected encoded value type for element %d", i)
 				}
+				values[i] = m
 			}
 			return map[string]any{"arrayValue": map[string]any{"values": values}}, nil
 		}
@@ -1691,7 +1715,7 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "query request failed", "error", err, "kind", q.kind)
@@ -1752,7 +1776,7 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:runQuery", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "query request failed", "error", err, "kind", query.kind)
@@ -1846,7 +1870,7 @@ func (c *Client) Count(ctx context.Context, q *Query) (int, error) {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:runAggregationQuery", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:runAggregationQuery", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "count query failed", "error", err, "kind", q.kind)
@@ -2052,7 +2076,7 @@ func (c *Client) Mutate(ctx context.Context, muts ...*Mutation) ([]*Key, error) 
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "mutate request failed", "error", err)
@@ -2227,7 +2251,7 @@ func (c *Client) NewTransaction(ctx context.Context, opts ...TransactionOption) 
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", apiURL, neturl.PathEscape(c.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", c.baseURL, neturl.PathEscape(c.projectID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, err
@@ -2322,7 +2346,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 		}
 
 		// URL-encode project ID to prevent injection attacks
-		reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", apiURL, neturl.PathEscape(c.projectID))
+		reqURL := fmt.Sprintf("%s/projects/%s:beginTransaction", c.baseURL, neturl.PathEscape(c.projectID))
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 		if err != nil {
 			return nil, err
@@ -2447,7 +2471,7 @@ func (tx *Transaction) Get(key *Key, dst any) error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:lookup", apiURL, neturl.PathEscape(tx.client.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:lookup", tx.client.baseURL, neturl.PathEscape(tx.client.projectID))
 	req, err := http.NewRequestWithContext(tx.ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
@@ -2734,7 +2758,7 @@ func (tx *Transaction) doCommit(ctx context.Context, token string) error {
 	}
 
 	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", apiURL, neturl.PathEscape(tx.client.projectID))
+	reqURL := fmt.Sprintf("%s/projects/%s:commit", tx.client.baseURL, neturl.PathEscape(tx.client.projectID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(jsonData))
 	if err != nil {
 		return err
