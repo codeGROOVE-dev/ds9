@@ -65,10 +65,8 @@ func TestDoRequestRetryOn5xxError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
@@ -126,10 +124,8 @@ func TestDoRequestFailsOn4xxError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
@@ -191,10 +187,8 @@ func TestDoRequestContextCancellation(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
-
-	client, err := datastore.NewClient(context.Background(), "test-project")
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -260,10 +254,8 @@ func TestGetWithHTTPError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
@@ -318,10 +310,8 @@ func TestPutWithHTTPError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
@@ -378,10 +368,8 @@ func TestDoRequestAllRetriesFail(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
@@ -441,10 +429,8 @@ func TestDoRequestUnexpectedSuccess(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
@@ -498,10 +484,8 @@ func TestDoRequestWithReadBodyError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	restore := datastore.SetTestURLs(metadataServer.URL, apiServer.URL)
-	defer restore()
+	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
 
-	ctx := context.Background()
 	client, err := datastore.NewClient(ctx, "test-project")
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)

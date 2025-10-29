@@ -15,6 +15,8 @@ import (
 // dst must be a pointer to a struct.
 // Returns ErrNoSuchEntity if the key is not found.
 func (c *Client) Get(ctx context.Context, key *Key, dst any) error {
+	ctx = c.withClientConfig(ctx)
+
 	if key == nil {
 		c.logger.WarnContext(ctx, "Get called with nil key")
 		return errors.New("key cannot be nil")
@@ -73,6 +75,7 @@ func (c *Client) Get(ctx context.Context, key *Key, dst any) error {
 // src must be a struct or pointer to struct.
 // Returns the key (useful for auto-generated IDs in the future).
 func (c *Client) Put(ctx context.Context, key *Key, src any) (*Key, error) {
+	ctx = c.withClientConfig(ctx)
 	if key == nil {
 		c.logger.WarnContext(ctx, "Put called with nil key")
 		return nil, errors.New("key cannot be nil")
@@ -119,6 +122,7 @@ func (c *Client) Put(ctx context.Context, key *Key, src any) (*Key, error) {
 
 // Delete deletes the entity with the given key.
 func (c *Client) Delete(ctx context.Context, key *Key) error {
+	ctx = c.withClientConfig(ctx)
 	if key == nil {
 		c.logger.WarnContext(ctx, "Delete called with nil key")
 		return errors.New("key cannot be nil")
@@ -162,6 +166,7 @@ func (c *Client) Delete(ctx context.Context, key *Key) error {
 // Returns ErrNoSuchEntity if any key is not found.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
+	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
 		c.logger.WarnContext(ctx, "GetMulti called with no keys")
 		return errors.New("keys cannot be empty")
@@ -256,6 +261,7 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 // Returns the keys (same as input) and any error.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, error) {
+	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
 		c.logger.WarnContext(ctx, "PutMulti called with no keys")
 		return nil, errors.New("keys cannot be empty")
@@ -329,6 +335,7 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 // DeleteMulti deletes multiple entities with their keys.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
+	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
 		c.logger.WarnContext(ctx, "DeleteMulti called with no keys")
 		return errors.New("keys cannot be empty")
@@ -383,6 +390,7 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 // DeleteAllByKind deletes all entities of a given kind.
 // This method queries for all keys and then deletes them in batches.
 func (c *Client) DeleteAllByKind(ctx context.Context, kind string) error {
+	ctx = c.withClientConfig(ctx)
 	c.logger.InfoContext(ctx, "deleting all entities by kind", "kind", kind)
 
 	// Query for all keys of this kind
@@ -412,6 +420,7 @@ func (c *Client) DeleteAllByKind(ctx context.Context, kind string) error {
 // Returns keys with IDs filled in. Complete keys are returned unchanged.
 // API compatible with cloud.google.com/go/datastore.
 func (c *Client) AllocateIDs(ctx context.Context, keys []*Key) ([]*Key, error) {
+	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
 		return keys, nil
 	}

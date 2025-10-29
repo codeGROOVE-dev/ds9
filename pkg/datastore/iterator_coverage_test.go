@@ -209,7 +209,7 @@ func TestIteratorKeysOnly(t *testing.T) {
 			Data string
 		}
 		key, err := it.Next(&entity)
-		if err == ErrDone {
+		if errors.Is(err, ErrDone) {
 			break
 		}
 		if err != nil {

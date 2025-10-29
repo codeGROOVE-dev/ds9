@@ -14,16 +14,18 @@ import (
 )
 
 // Query represents a Datastore query.
+//
+//nolint:govet // Field order prioritizes logical grouping over memory optimization
 type Query struct {
-	ancestor    *Key
-	kind        string
 	filters     []queryFilter
 	orders      []queryOrder
 	projection  []string
 	distinctOn  []string
-	namespace   string
 	startCursor Cursor
 	endCursor   Cursor
+	kind        string
+	namespace   string
+	ancestor    *Key
 	limit       int
 	offset      int
 	keysOnly    bool
@@ -319,6 +321,7 @@ func buildQueryMap(query *Query) map[string]any {
 // AllKeys returns all keys matching the query.
 // This is a convenience method for KeysOnly queries.
 func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
+	ctx = c.withClientConfig(ctx)
 	if !q.keysOnly {
 		c.logger.WarnContext(ctx, "AllKeys called on non-KeysOnly query")
 		return nil, errors.New("AllKeys requires KeysOnly query")
@@ -385,6 +388,7 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 // Returns the keys of the retrieved entities and any error.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, error) {
+	ctx = c.withClientConfig(ctx)
 	c.logger.DebugContext(ctx, "querying for entities", "kind", query.kind, "limit", query.limit)
 
 	token, err := auth.AccessToken(ctx)
@@ -467,6 +471,7 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 // Deprecated: Use aggregation queries with RunAggregationQuery instead.
 // API compatible with cloud.google.com/go/datastore.
 func (c *Client) Count(ctx context.Context, q *Query) (int, error) {
+	ctx = c.withClientConfig(ctx)
 	c.logger.DebugContext(ctx, "counting entities", "kind", q.kind)
 
 	token, err := auth.AccessToken(ctx)
@@ -548,6 +553,7 @@ func (c *Client) Count(ctx context.Context, q *Query) (int, error) {
 // Run executes the query and returns an iterator for the results.
 // API compatible with cloud.google.com/go/datastore.
 func (c *Client) Run(ctx context.Context, q *Query) *Iterator {
+	ctx = c.withClientConfig(ctx)
 	return &Iterator{
 		ctx:       ctx,
 		client:    c,

@@ -9,6 +9,8 @@ import (
 )
 
 // Test manual transaction API (NewTransaction, Get, Put, Delete, Commit, Rollback)
+//
+//nolint:gocognit,maintidx // Comprehensive test coverage requires many test cases
 func TestManualTransaction(t *testing.T) {
 	client, cleanup := datastore.NewMockClient(t)
 	defer cleanup()

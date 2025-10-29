@@ -25,9 +25,9 @@ const (
 
 // Mutation represents a pending datastore mutation.
 type Mutation struct {
-	op     MutationOp
 	key    *Key
 	entity any
+	op     MutationOp
 }
 
 // NewInsert creates an insert mutation.
@@ -72,6 +72,7 @@ func NewDelete(k *Key) *Mutation {
 // Mutate applies one or more mutations atomically.
 // API compatible with cloud.google.com/go/datastore.
 func (c *Client) Mutate(ctx context.Context, muts ...*Mutation) ([]*Key, error) {
+	ctx = c.withClientConfig(ctx)
 	if len(muts) == 0 {
 		return nil, nil
 	}

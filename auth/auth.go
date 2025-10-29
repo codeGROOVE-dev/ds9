@@ -22,38 +22,52 @@ const (
 	maxBodySize    = 10 * 1024 * 1024 // 10MB
 	defaultTimeout = 30 * time.Second
 	metadataFlavor = "Google"
+	//nolint:revive // GCP metadata server only supports HTTP
+	defaultMetadataURL = "http://metadata.google.internal/computeMetadata/v1"
 )
 
-var (
-	metadataURL = "http://metadata.google.internal/computeMetadata/v1" //nolint:revive // GCP metadata server only supports HTTP
-	isTestMode  = false
+var httpClient = &http.Client{
+	Timeout: defaultTimeout,
+}
 
-	httpClient = &http.Client{
-		Timeout: defaultTimeout,
+// Config holds auth configuration.
+type Config struct {
+	// MetadataURL is the URL for the GCP metadata server.
+	// Defaults to the production metadata server if empty.
+	MetadataURL string
+
+	// SkipADC skips Application Default Credentials and goes straight to metadata server.
+	// Useful for testing to ensure mock servers are used.
+	SkipADC bool
+}
+
+// configKey is the key for storing Config in context.
+type configKey struct{}
+
+// WithConfig returns a new context with the given auth config.
+func WithConfig(ctx context.Context, cfg *Config) context.Context {
+	return context.WithValue(ctx, configKey{}, cfg)
+}
+
+// getConfig retrieves the auth config from context, or returns defaults.
+func getConfig(ctx context.Context) *Config {
+	if cfg, ok := ctx.Value(configKey{}).(*Config); ok && cfg != nil {
+		return cfg
 	}
-)
-
-// SetMetadataURL sets a custom metadata server URL for testing.
-// Returns a function that restores the original URL.
-// WARNING: This function should only be called in test code.
-// Set DS9_ALLOW_TEST_OVERRIDES=true to enable in non-test environments.
-func SetMetadataURL(urlStr string) func() {
-	old := metadataURL
-	oldTestMode := isTestMode
-	metadataURL = urlStr
-	isTestMode = true // Enable test mode to skip ADC
-	return func() {
-		metadataURL = old
-		isTestMode = oldTestMode
+	return &Config{
+		MetadataURL: defaultMetadataURL,
+		SkipADC:     false,
 	}
 }
 
 // AccessToken retrieves a GCP access token.
 // It tries Application Default Credentials first, then falls back to the metadata server.
-// In test mode, ADC is skipped to ensure mock servers are used.
+// Configuration can be provided via auth.WithConfig in the context.
 func AccessToken(ctx context.Context) (string, error) {
-	// Skip ADC in test mode to ensure tests use mock metadata server
-	if !isTestMode {
+	cfg := getConfig(ctx)
+
+	// Skip ADC if configured (useful for testing to ensure mock metadata server is used)
+	if !cfg.SkipADC {
 		// Try Application Default Credentials first (for local development)
 		token, err := accessTokenFromADC(ctx)
 		if err == nil {
@@ -165,7 +179,8 @@ func exchangeRefreshToken(ctx context.Context, clientID, clientSecret, refreshTo
 // accessTokenFromMetadata retrieves an access token from the GCP metadata server.
 // This is used when running on GCP (GCE, GKE, Cloud Run, etc.).
 func accessTokenFromMetadata(ctx context.Context) (string, error) {
-	reqURL := metadataURL + "/instance/service-accounts/default/token"
+	cfg := getConfig(ctx)
+	reqURL := cfg.MetadataURL + "/instance/service-accounts/default/token"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
 	if err != nil {
@@ -206,7 +221,8 @@ func accessTokenFromMetadata(ctx context.Context) (string, error) {
 
 // ProjectID retrieves the project ID from the GCP metadata server.
 func ProjectID(ctx context.Context) (string, error) {
-	reqURL := metadataURL + "/project/project-id"
+	cfg := getConfig(ctx)
+	reqURL := cfg.MetadataURL + "/project/project-id"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
 	if err != nil {

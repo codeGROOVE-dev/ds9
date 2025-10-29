@@ -3,8 +3,6 @@
 // It uses only the Go standard library and makes direct REST API calls
 // to the Datastore API. Authentication is handled via the GCP metadata
 // server when running on GCP, or via Application Default Credentials.
-//
-//nolint:revive // Public structs required for API compatibility with cloud.google.com/go/datastore
 package datastore
 
 import (
@@ -12,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,11 +25,11 @@ const (
 	jitterFraction = 0.25 // 25% jitter
 )
 
-var (
-	// atomicAPIURL stores the API URL for thread-safe access.
-	// Use getAPIURL() to read and setAPIURL() to write.
-	atomicAPIURL atomic.Pointer[string]
+const (
+	defaultAPIURL = "https://datastore.googleapis.com/v1"
+)
 
+var (
 	httpClient = &http.Client{
 		Timeout: defaultTimeout,
 		Transport: &http.Transport{
@@ -52,60 +49,60 @@ var (
 	}
 )
 
-//nolint:gochecknoinits // Required for thread-safe initialization of atomic pointer
-func init() {
-	defaultURL := "https://datastore.googleapis.com/v1"
-	atomicAPIURL.Store(&defaultURL)
+// Config holds datastore client configuration.
+type Config struct {
+	// AuthConfig is passed to the auth package for authentication.
+	// Can be nil to use defaults.
+	AuthConfig *auth.Config
+
+	// APIURL is the base URL for the Datastore API.
+	// Defaults to production if empty.
+	APIURL string
 }
 
-// getAPIURL returns the current API URL in a thread-safe manner.
-func getAPIURL() string {
-	return *atomicAPIURL.Load()
+// configKey is the key for storing Config in context.
+type configKey struct{}
+
+// WithConfig returns a new context with the given datastore config.
+// This also sets the auth config if provided.
+func WithConfig(ctx context.Context, cfg *Config) context.Context {
+	if cfg.AuthConfig != nil {
+		ctx = auth.WithConfig(ctx, cfg.AuthConfig)
+	}
+	return context.WithValue(ctx, configKey{}, cfg)
 }
 
-// setAPIURL sets the API URL in a thread-safe manner.
-func setAPIURL(url string) {
-	atomicAPIURL.Store(&url)
-}
-
-// SetTestURLs configures custom metadata and API URLs for testing.
-// This is intended for use by testing packages like ds9mock.
-// Returns a function that restores the original URLs.
-// WARNING: This function should only be called in test code.
-// Set DS9_ALLOW_TEST_OVERRIDES=true to enable in non-test environments.
-//
-// Example:
-//
-//	restore := ds9.SetTestURLs("http://localhost:8080", "http://localhost:9090")
-//	defer restore()
-func SetTestURLs(metadata, api string) (restore func()) {
-	// Auth package will log warning if called outside test environment
-	oldAPI := getAPIURL()
-	setAPIURL(api)
-	restoreAuth := auth.SetMetadataURL(metadata)
-	return func() {
-		setAPIURL(oldAPI)
-		restoreAuth()
+// getConfig retrieves the datastore config from context, or returns defaults.
+func getConfig(ctx context.Context) *Config {
+	if cfg, ok := ctx.Value(configKey{}).(*Config); ok && cfg != nil {
+		return cfg
+	}
+	return &Config{
+		APIURL: defaultAPIURL,
 	}
 }
 
 // Client is a Google Cloud Datastore client.
 type Client struct {
 	logger     *slog.Logger
+	authConfig *auth.Config // Auth configuration for this client
 	projectID  string
 	databaseID string
-	baseURL    string // API base URL, defaults to production but can be overridden for testing
+	baseURL    string // API base URL, defaults to production
 }
 
 // NewClient creates a new Datastore client.
 // If projectID is empty, it will be fetched from the GCP metadata server.
+// Configuration can be provided via WithConfig in the context.
 func NewClient(ctx context.Context, projectID string) (*Client, error) {
 	return NewClientWithDatabase(ctx, projectID, "")
 }
 
 // NewClientWithDatabase creates a new Datastore client with a specific database.
+// Configuration can be provided via WithConfig in the context.
 func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, error) {
 	logger := slog.Default()
+	cfg := getConfig(ctx)
 
 	if projID == "" {
 		if !testing.Testing() {
@@ -126,10 +123,16 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 		logger.InfoContext(ctx, "creating datastore client", "project_id", projID, "database_id", dbID)
 	}
 
+	baseURL := cfg.APIURL
+	if baseURL == "" {
+		baseURL = defaultAPIURL
+	}
+
 	return &Client{
 		projectID:  projID,
 		databaseID: dbID,
-		baseURL:    getAPIURL(),
+		baseURL:    baseURL,
+		authConfig: cfg.AuthConfig,
 		logger:     logger,
 	}, nil
 }
@@ -139,4 +142,14 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 // but is provided for API compatibility with cloud.google.com/go/datastore.
 func (*Client) Close() error {
 	return nil
+}
+
+// withClientConfig returns a context with the client's auth configuration injected.
+// This ensures that operations use the client's auth settings even if the caller
+// passes a bare context.Background().
+func (c *Client) withClientConfig(ctx context.Context) context.Context {
+	if c.authConfig != nil {
+		ctx = auth.WithConfig(ctx, c.authConfig)
+	}
+	return ctx
 }

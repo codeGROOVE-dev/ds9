@@ -3,6 +3,8 @@ package datastore
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -292,19 +294,30 @@ func TestGet_ErrorCases(t *testing.T) {
 }
 
 func TestNewClientWithDatabase_Coverage(t *testing.T) {
-	SetTestURLs("http://localhost:8080/datastore", "http://localhost:8080/token")
+	// Use NewMockClient instead of hardcoded URLs to avoid port conflicts
+	client, cleanup := NewMockClient(t)
+	defer cleanup()
 
-	ctx := context.Background()
-
-	// Test with database ID
-	_, err := NewClientWithDatabase(ctx, "test-project", "test-db")
-	if err != nil {
-		// Expected to fail without real backend, but we exercise the code path
-		t.Logf("NewClientWithDatabase failed as expected: %v", err)
+	if client == nil {
+		t.Fatal("expected non-nil client")
 	}
 
+	// Test with database ID using mock servers
+	ctx := context.Background()
+	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer metadataServer.Close()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer apiServer.Close()
+
+	testCtx := TestConfig(ctx, metadataServer.URL, apiServer.URL)
+
 	// Test with empty project (error case)
-	_, err = NewClientWithDatabase(ctx, "", "test-db")
+	_, err := NewClientWithDatabase(testCtx, "", "test-db")
 	if err == nil {
 		t.Error("Expected error for empty project ID, got nil")
 	}

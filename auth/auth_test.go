@@ -12,30 +12,27 @@ import (
 	"testing"
 )
 
-func TestSetMetadataURL(t *testing.T) {
-	originalURL := metadataURL
-	originalTestMode := isTestMode
+func TestWithConfig(t *testing.T) {
+	// Test that config can be set in context
+	cfg := &Config{
+		MetadataURL: "http://custom-metadata",
+		SkipADC:     true,
+	}
+	ctx := WithConfig(context.Background(), cfg)
 
-	// Set custom URL
-	restore := SetMetadataURL("http://custom-metadata")
-
-	if metadataURL != "http://custom-metadata" {
-		t.Errorf("expected metadataURL to be http://custom-metadata, got %s", metadataURL)
+	// Context should be non-nil
+	if ctx == nil {
+		t.Fatal("expected non-nil context")
 	}
 
-	if !isTestMode {
-		t.Error("expected isTestMode to be true")
+	// Verify config is retrievable
+	retrievedCfg := getConfig(ctx)
+	if retrievedCfg.MetadataURL != "http://custom-metadata" {
+		t.Errorf("expected MetadataURL to be http://custom-metadata, got %s", retrievedCfg.MetadataURL)
 	}
 
-	// Restore
-	restore()
-
-	if metadataURL != originalURL {
-		t.Errorf("expected metadataURL to be restored to %s, got %s", originalURL, metadataURL)
-	}
-
-	if isTestMode != originalTestMode {
-		t.Errorf("expected isTestMode to be restored to %v, got %v", originalTestMode, isTestMode)
+	if !retrievedCfg.SkipADC {
+		t.Error("expected SkipADC to be true")
 	}
 }
 
@@ -111,10 +108,11 @@ func TestAccessTokenFromMetadata(t *testing.T) {
 			}))
 			defer server.Close()
 
-			restore := SetMetadataURL(server.URL)
-			defer restore()
+			ctx := WithConfig(context.Background(), &Config{
+				MetadataURL: server.URL,
+				SkipADC:     true,
+			})
 
-			ctx := context.Background()
 			token, err := accessTokenFromMetadata(ctx)
 
 			if tt.wantErr {
@@ -153,12 +151,12 @@ func TestAccessToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 
-	ctx := context.Background()
-
-	// In test mode, should use metadata server
+	// With SkipADC=true, should use metadata server
 	token, err := AccessToken(ctx)
 	if err != nil {
 		t.Fatalf("AccessToken failed: %v", err)
@@ -353,10 +351,10 @@ func TestProjectID(t *testing.T) {
 			}))
 			defer server.Close()
 
-			restore := SetMetadataURL(server.URL)
-			defer restore()
-
-			ctx := context.Background()
+			ctx := WithConfig(context.Background(), &Config{
+				MetadataURL: server.URL,
+				SkipADC:     true,
+			})
 			projectID, err := ProjectID(ctx)
 
 			if tt.wantErr {
@@ -379,10 +377,10 @@ func TestProjectID(t *testing.T) {
 
 func TestAccessTokenMetadataServerDown(t *testing.T) {
 	// Point to non-existent server
-	restore := SetMetadataURL("http://localhost:59999")
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: "http://localhost:59999",
+		SkipADC:     true,
+	})
 	_, err := accessTokenFromMetadata(ctx)
 
 	if err == nil {
@@ -396,10 +394,10 @@ func TestAccessTokenMetadataServerDown(t *testing.T) {
 
 func TestProjectIDMetadataServerDown(t *testing.T) {
 	// Point to non-existent server
-	restore := SetMetadataURL("http://localhost:59998")
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: "http://localhost:59998",
+		SkipADC:     true,
+	})
 	_, err := ProjectID(ctx)
 
 	if err == nil {
@@ -465,10 +463,10 @@ func TestAccessTokenFromMetadataReadError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 	_, err := accessTokenFromMetadata(ctx)
 
 	if err == nil {
@@ -488,10 +486,10 @@ func TestProjectIDReadError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 	_, err := ProjectID(ctx)
 
 	if err == nil {
@@ -521,10 +519,10 @@ func TestAccessTokenFromMetadataWithMalformedJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 	_, err := accessTokenFromMetadata(ctx)
 	// Should either succeed (if parser is lenient) or fail with parse error
 	if err != nil {
@@ -547,10 +545,10 @@ func TestProjectIDWithEmptyResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 	projectID, err := ProjectID(ctx)
 	if err != nil {
 		t.Fatalf("ProjectID with empty response failed: %v", err)
@@ -650,15 +648,16 @@ func TestAccessTokenFallbackToMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 
 	// Ensure no ADC credentials are available
 	if err := os.Unsetenv("GOOGLE_APPLICATION_CREDENTIALS"); err != nil {
 		t.Fatalf("failed to unset env var: %v", err)
 	}
 
-	ctx := context.Background()
 	token, err := AccessToken(ctx)
 	if err != nil {
 		t.Fatalf("AccessToken failed: %v", err)
@@ -688,10 +687,10 @@ func TestProjectIDInvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 	projectID, err := ProjectID(ctx)
 
 	if err != nil {
@@ -750,10 +749,10 @@ func TestAccessTokenFromADCDefaultLocation(t *testing.T) {
 // Test ProjectID with request error
 func TestProjectIDRequestError(t *testing.T) {
 	// Set invalid URL to trigger request error
-	restore := SetMetadataURL("http://invalid-host-that-does-not-exist-12345")
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: "http://invalid-host-that-does-not-exist-12345",
+		SkipADC:     true,
+	})
 	_, err := ProjectID(ctx)
 
 	if err == nil {
@@ -777,10 +776,10 @@ func TestAccessTokenFromMetadataTypeError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	restore := SetMetadataURL(server.URL)
-	defer restore()
-
-	ctx := context.Background()
+	ctx := WithConfig(context.Background(), &Config{
+		MetadataURL: server.URL,
+		SkipADC:     true,
+	})
 	_, err := accessTokenFromMetadata(ctx)
 
 	if err == nil {
