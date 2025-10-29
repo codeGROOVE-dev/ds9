@@ -18,9 +18,12 @@ package ds9mock
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/codeGROOVE-dev/ds9"
@@ -30,6 +33,7 @@ const metadataFlavor = "Google"
 
 // Store holds the in-memory entity storage.
 type Store struct {
+	mu       sync.RWMutex
 	entities map[string]map[string]any
 }
 
@@ -106,6 +110,16 @@ func NewClient(t *testing.T) (client *ds9.Client, cleanup func()) {
 			return
 		}
 
+		if r.URL.Path == "/projects/test-project:allocateIds" {
+			store.handleAllocateIDs(w, r)
+			return
+		}
+
+		if r.URL.Path == "/projects/test-project:runAggregationQuery" {
+			store.handleRunAggregationQuery(w, r)
+			return
+		}
+
 		w.WriteHeader(http.StatusNotFound)
 	}))
 
@@ -163,6 +177,9 @@ func (s *Store) handleLookup(w http.ResponseWriter, r *http.Request) {
 	// Process all keys
 	var found []map[string]any
 	var missing []map[string]any
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	for _, keyData := range req.Keys {
 		path, ok := keyData["path"].([]any)
@@ -245,7 +262,80 @@ func (s *Store) handleCommit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var mutationResults []map[string]any
+
 	for _, mutation := range req.Mutations {
+		var resultKey map[string]any
+
+		// Handle insert
+		if insert, ok := mutation["insert"].(map[string]any); ok {
+			keyData, ok := insert["key"].(map[string]any)
+			if !ok {
+				continue
+			}
+			path, ok := keyData["path"].([]any)
+			if !ok || len(path) == 0 {
+				continue
+			}
+			pathElem, ok := path[0].(map[string]any)
+			if !ok {
+				continue
+			}
+			kind, ok := pathElem["kind"].(string)
+			if !ok {
+				continue
+			}
+
+			// Handle both name and ID keys
+			var keyStr string
+			if name, ok := pathElem["name"].(string); ok {
+				keyStr = kind + "/" + name
+			} else if id, ok := pathElem["id"].(string); ok {
+				keyStr = kind + "/" + id
+			} else {
+				continue
+			}
+
+			s.entities[keyStr] = insert
+			resultKey = keyData
+		}
+
+		// Handle update
+		if update, ok := mutation["update"].(map[string]any); ok {
+			keyData, ok := update["key"].(map[string]any)
+			if !ok {
+				continue
+			}
+			path, ok := keyData["path"].([]any)
+			if !ok || len(path) == 0 {
+				continue
+			}
+			pathElem, ok := path[0].(map[string]any)
+			if !ok {
+				continue
+			}
+			kind, ok := pathElem["kind"].(string)
+			if !ok {
+				continue
+			}
+
+			// Handle both name and ID keys
+			var keyStr string
+			if name, ok := pathElem["name"].(string); ok {
+				keyStr = kind + "/" + name
+			} else if id, ok := pathElem["id"].(string); ok {
+				keyStr = kind + "/" + id
+			} else {
+				continue
+			}
+
+			s.entities[keyStr] = update
+			resultKey = keyData
+		}
+
 		// Handle upsert
 		if upsert, ok := mutation["upsert"].(map[string]any); ok {
 			keyData, ok := upsert["key"].(map[string]any)
@@ -276,6 +366,7 @@ func (s *Store) handleCommit(w http.ResponseWriter, r *http.Request) {
 			}
 
 			s.entities[keyStr] = upsert
+			resultKey = keyData
 		}
 
 		// Handle delete
@@ -304,13 +395,21 @@ func (s *Store) handleCommit(w http.ResponseWriter, r *http.Request) {
 			}
 
 			delete(s.entities, keyStr)
+			resultKey = deleteKey
+		}
+
+		// Add mutation result
+		if resultKey != nil {
+			mutationResults = append(mutationResults, map[string]any{
+				"key": resultKey,
+			})
 		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]any{
-		"mutationResults": []any{},
+		"mutationResults": mutationResults,
 	}); err != nil {
 		log.Printf("failed to encode commit response: %v", err)
 	}
@@ -370,6 +469,9 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find all entities of this kind
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var results []any
 	for _, entity := range s.entities {
 		keyData, ok := entity["key"].(map[string]any)
@@ -447,5 +549,305 @@ func handleBeginTransaction(w http.ResponseWriter, r *http.Request) {
 		"transaction": "test-transaction-id",
 	}); err != nil {
 		log.Printf("failed to encode transaction response: %v", err)
+	}
+}
+
+// handleAllocateIDs handles :allocateIds requests.
+func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DatabaseID string           `json:"databaseId"`
+		Keys       []map[string]any `json:"keys"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Validate routing header for named databases
+	if req.DatabaseID != "" {
+		routingHeader := r.Header.Get("X-Goog-Request-Params")
+		if routingHeader == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"code":    400,
+					"message": "Missing routing header for named database",
+					"status":  "INVALID_ARGUMENT",
+				},
+			}); err != nil {
+				log.Printf("failed to encode error response: %v", err)
+			}
+			return
+		}
+	}
+
+	// Allocate IDs for incomplete keys
+	allocatedKeys := make([]map[string]any, 0, len(req.Keys))
+	for _, keyData := range req.Keys {
+		// Parse path to check if incomplete
+		path, ok := keyData["path"].([]any)
+		if !ok || len(path) == 0 {
+			continue
+		}
+
+		// Get last element
+		lastElem, ok := path[len(path)-1].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// If it has no name or id, allocate an ID
+		_, hasName := lastElem["name"]
+		_, hasID := lastElem["id"]
+		if !hasName && !hasID {
+			// Allocate a simple sequential ID
+			lastElem["id"] = "1001" // Simple mock ID
+		}
+
+		allocatedKeys = append(allocatedKeys, keyData)
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"keys": allocatedKeys,
+	}); err != nil {
+		log.Printf("failed to encode allocateIds response: %v", err)
+	}
+}
+
+// matchesFilter checks if an entity matches a filter.
+func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
+	// Handle propertyFilter
+	if propFilter, ok := filterMap["propertyFilter"].(map[string]any); ok {
+		property, ok := propFilter["property"].(map[string]any)
+		if !ok {
+			return true // Invalid filter, allow all
+		}
+		propertyName, ok := property["name"].(string)
+		if !ok {
+			return true
+		}
+		operator, ok := propFilter["op"].(string)
+		if !ok {
+			return true
+		}
+		filterValue := propFilter["value"]
+
+		// Get entity properties
+		properties, ok := entity["properties"].(map[string]any)
+		if !ok {
+			return false
+		}
+		entityProp, ok := properties[propertyName].(map[string]any)
+		if !ok {
+			return false // Property doesn't exist
+		}
+
+		// Extract entity value based on type
+		var entityValue any
+		if intVal, ok := entityProp["integerValue"].(string); ok {
+			var i int64
+			if _, err := fmt.Sscanf(intVal, "%d", &i); err == nil {
+				entityValue = i
+			}
+		} else if strVal, ok := entityProp["stringValue"].(string); ok {
+			entityValue = strVal
+		} else if boolVal, ok := entityProp["booleanValue"].(bool); ok {
+			entityValue = boolVal
+		} else if floatVal, ok := entityProp["doubleValue"].(float64); ok {
+			entityValue = floatVal
+		}
+
+		// Extract filter value
+		var filterVal any
+		if fv, ok := filterValue.(map[string]any); ok {
+			if intVal, ok := fv["integerValue"].(string); ok {
+				var i int64
+				if _, err := fmt.Sscanf(intVal, "%d", &i); err == nil {
+					filterVal = i
+				}
+			} else if strVal, ok := fv["stringValue"].(string); ok {
+				filterVal = strVal
+			}
+		}
+
+		// Compare based on operator
+		switch operator {
+		case "EQUAL":
+			return entityValue == filterVal
+		case "GREATER_THAN":
+			if ev, ok := entityValue.(int64); ok {
+				if fv, ok := filterVal.(int64); ok {
+					return ev > fv
+				}
+			}
+		case "GREATER_THAN_OR_EQUAL":
+			if ev, ok := entityValue.(int64); ok {
+				if fv, ok := filterVal.(int64); ok {
+					return ev >= fv
+				}
+			}
+		case "LESS_THAN":
+			if ev, ok := entityValue.(int64); ok {
+				if fv, ok := filterVal.(int64); ok {
+					return ev < fv
+				}
+			}
+		case "LESS_THAN_OR_EQUAL":
+			if ev, ok := entityValue.(int64); ok {
+				if fv, ok := filterVal.(int64); ok {
+					return ev <= fv
+				}
+			}
+		}
+	}
+
+	// Handle compositeFilter (AND/OR)
+	if compFilter, ok := filterMap["compositeFilter"].(map[string]any); ok {
+		op, ok := compFilter["op"].(string)
+		if !ok {
+			return true
+		}
+		filters, ok := compFilter["filters"].([]any)
+		if !ok {
+			return true
+		}
+
+		if op == "AND" {
+			for _, f := range filters {
+				if fm, ok := f.(map[string]any); ok {
+					if !matchesFilter(entity, fm) {
+						return false
+					}
+				}
+			}
+			return true
+		} else if op == "OR" {
+			for _, f := range filters {
+				if fm, ok := f.(map[string]any); ok {
+					if matchesFilter(entity, fm) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+	}
+
+	return true // No filter or unrecognized filter, allow all
+}
+
+// handleRunAggregationQuery handles :runAggregationQuery requests.
+func (s *Store) handleRunAggregationQuery(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DatabaseID       string         `json:"databaseId"`
+		AggregationQuery map[string]any `json:"aggregationQuery"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Validate routing header for named databases
+	if req.DatabaseID != "" {
+		routingHeader := r.Header.Get("X-Goog-Request-Params")
+		if routingHeader == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"code":    400,
+					"message": "Missing routing header for named database",
+					"status":  "INVALID_ARGUMENT",
+				},
+			}); err != nil {
+				log.Printf("failed to encode error response: %v", err)
+			}
+			return
+		}
+	}
+
+	// Extract query from aggregationQuery
+	nestedQuery, ok := req.AggregationQuery["nestedQuery"].(map[string]any)
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Extract kind from query
+	kindArray, ok := nestedQuery["kind"].([]any)
+	if !ok || len(kindArray) == 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	kindMap, ok := kindArray[0].(map[string]any)
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	kind, ok := kindMap["name"].(string)
+	if !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Count entities of this kind in store
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count := 0
+	// entities map is keyed by "kind/keyname", so we need to iterate
+	for keyStr, entity := range s.entities {
+		// Extract kind from entity's key
+		keyData, ok := entity["key"].(map[string]any)
+		if !ok {
+			continue
+		}
+		path, ok := keyData["path"].([]any)
+		if !ok || len(path) == 0 {
+			continue
+		}
+		pathElem, ok := path[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		entityKind, ok := pathElem["kind"].(string)
+		if !ok || entityKind != kind {
+			continue
+		}
+
+		// Apply filters if present
+		if filterMap, hasFilter := nestedQuery["filter"].(map[string]any); hasFilter {
+			if !matchesFilter(entity, filterMap) {
+				continue
+			}
+		}
+
+		_ = keyStr
+		count++
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"batch": map[string]any{
+			"aggregationResults": []map[string]any{
+				{
+					"aggregateProperties": map[string]any{
+						"total": map[string]any{
+							"integerValue": strconv.Itoa(count),
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		log.Printf("failed to encode aggregation response: %v", err)
 	}
 }

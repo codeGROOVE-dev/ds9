@@ -355,9 +355,9 @@ func TestIntegrationCleanup(t *testing.T) {
 
 // integrationEntity for integration tests
 type integrationEntity struct {
+	Timestamp time.Time `datastore:"timestamp"`
 	Name      string    `datastore:"name"`
 	Count     int64     `datastore:"count"`
-	Timestamp time.Time `datastore:"timestamp"`
 }
 
 // TestIntegrationGetAll tests the GetAll method with real GCP or mock.

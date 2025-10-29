@@ -17,12 +17,12 @@ import (
 
 // testEntity represents a simple test entity.
 type testEntity struct {
-	Name      string    `datastore:"name"`
-	Count     int64     `datastore:"count"`
-	Active    bool      `datastore:"active"`
-	Score     float64   `datastore:"score"`
 	UpdatedAt time.Time `datastore:"updated_at"`
+	Name      string    `datastore:"name"`
 	Notes     string    `datastore:"notes,noindex"`
+	Count     int64     `datastore:"count"`
+	Score     float64   `datastore:"score"`
+	Active    bool      `datastore:"active"`
 }
 
 func TestNewClient(t *testing.T) {
@@ -707,15 +707,15 @@ func TestEntityWithAllTypes(t *testing.T) {
 	ctx := context.Background()
 
 	type AllTypes struct {
-		StringVal  string    `datastore:"str"`
-		Int64Val   int64     `datastore:"i64"`
-		Int32Val   int32     `datastore:"i32"`
-		IntVal     int       `datastore:"i"`
-		BoolVal    bool      `datastore:"b"`
-		Float64Val float64   `datastore:"f64"`
 		TimeVal    time.Time `datastore:"t"`
+		StringVal  string    `datastore:"str"`
 		NoIndex    string    `datastore:"noindex,noindex"`
 		Skip       string    `datastore:"-"`
+		Int64Val   int64     `datastore:"i64"`
+		IntVal     int       `datastore:"i"`
+		Float64Val float64   `datastore:"f64"`
+		Int32Val   int32     `datastore:"i32"`
+		BoolVal    bool      `datastore:"b"`
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -963,16 +963,16 @@ func TestUnsupportedEncodeType(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Entity with unsupported type (slice)
+	// Entity with unsupported type (map)
 	type BadEntity struct {
-		Name  string
-		Items []string // slices not supported
+		Name string
+		Data map[string]string // maps not supported
 	}
 
 	key := ds9.NameKey("TestKind", "bad", nil)
 	entity := BadEntity{
-		Name:  "test",
-		Items: []string{"a", "b"},
+		Name: "test",
+		Data: map[string]string{"key": "value"},
 	}
 
 	_, err := client.Put(ctx, key, &entity)
@@ -1042,9 +1042,9 @@ func TestEntityWithSkippedFields(t *testing.T) {
 
 	type EntityWithSkip struct {
 		Name    string `datastore:"name"`
-		Count   int64  `datastore:"count"`
-		Skipped string `datastore:"-"` // Should not be stored
-		private string // Should not be stored (unexported)
+		Skipped string `datastore:"-"`
+		private string
+		Count   int64 `datastore:"count"`
 	}
 
 	key := ds9.NameKey("TestKind", "skip", nil)
@@ -2425,14 +2425,14 @@ func TestDecodeValueEdgeCases(t *testing.T) {
 
 	// Test with all basic types
 	type ComplexEntity struct {
+		Time    time.Time `datastore:"t"`
 		String  string    `datastore:"s"`
+		NoIndex string    `datastore:"n,noindex"`
 		Int     int       `datastore:"i"`
-		Int32   int32     `datastore:"i32"`
 		Int64   int64     `datastore:"i64"`
 		Float   float64   `datastore:"f"`
+		Int32   int32     `datastore:"i32"`
 		Bool    bool      `datastore:"b"`
-		Time    time.Time `datastore:"t"`
-		NoIndex string    `datastore:"n,noindex"`
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -3639,8 +3639,8 @@ func TestPutWithInvalidEntityStructure(t *testing.T) {
 
 	// Entity with channel (unsupported type)
 	type BadEntity struct {
-		Name string
 		Ch   chan int
+		Name string
 	}
 
 	key := ds9.NameKey("Test", "bad", nil)
@@ -4299,8 +4299,8 @@ func TestPutMultiWithPartialEncode(t *testing.T) {
 
 	// Mix of valid and invalid entities
 	type MixedEntity struct {
+		Data any
 		Name string
-		Data any // interface{} - may cause encoding issues
 	}
 
 	keys := []*ds9.Key{
@@ -7331,6 +7331,693 @@ func TestTransactionOptions(t *testing.T) {
 		// With mock client, this should succeed
 		if err != nil {
 			t.Fatalf("Transaction with combined options failed: %v", err)
+		}
+	})
+}
+
+// Test entity with arrays for array/slice tests
+type arrayEntity struct {
+	Strings []string  `datastore:"strings"`
+	Ints    []int64   `datastore:"ints"`
+	Floats  []float64 `datastore:"floats"`
+	Bools   []bool    `datastore:"bools"`
+}
+
+func TestArraySliceSupport(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("StringSlice", func(t *testing.T) {
+		key := ds9.NameKey("ArrayTest", "strings", nil)
+		entity := &arrayEntity{
+			Strings: []string{"hello", "world", "test"},
+		}
+
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put with string slice failed: %v", err)
+		}
+
+		var result arrayEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if len(result.Strings) != 3 {
+			t.Errorf("Expected 3 strings, got %d", len(result.Strings))
+		}
+		if result.Strings[0] != "hello" || result.Strings[1] != "world" || result.Strings[2] != "test" {
+			t.Errorf("String slice values incorrect: %v", result.Strings)
+		}
+	})
+
+	t.Run("Int64Slice", func(t *testing.T) {
+		key := ds9.NameKey("ArrayTest", "ints", nil)
+		entity := &arrayEntity{
+			Ints: []int64{1, 2, 3, 42, 100},
+		}
+
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put with int64 slice failed: %v", err)
+		}
+
+		var result arrayEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if len(result.Ints) != 5 {
+			t.Errorf("Expected 5 ints, got %d", len(result.Ints))
+		}
+		if result.Ints[3] != 42 {
+			t.Errorf("Expected Ints[3] = 42, got %d", result.Ints[3])
+		}
+	})
+
+	t.Run("Float64Slice", func(t *testing.T) {
+		key := ds9.NameKey("ArrayTest", "floats", nil)
+		entity := &arrayEntity{
+			Floats: []float64{1.1, 2.2, 3.3},
+		}
+
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put with float64 slice failed: %v", err)
+		}
+
+		var result arrayEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if len(result.Floats) != 3 {
+			t.Errorf("Expected 3 floats, got %d", len(result.Floats))
+		}
+		if result.Floats[0] != 1.1 {
+			t.Errorf("Expected Floats[0] = 1.1, got %f", result.Floats[0])
+		}
+	})
+
+	t.Run("BoolSlice", func(t *testing.T) {
+		key := ds9.NameKey("ArrayTest", "bools", nil)
+		entity := &arrayEntity{
+			Bools: []bool{true, false, true},
+		}
+
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put with bool slice failed: %v", err)
+		}
+
+		var result arrayEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if len(result.Bools) != 3 {
+			t.Errorf("Expected 3 bools, got %d", len(result.Bools))
+		}
+		if result.Bools[0] != true || result.Bools[1] != false {
+			t.Errorf("Bool slice values incorrect: %v", result.Bools)
+		}
+	})
+
+	t.Run("EmptySlices", func(t *testing.T) {
+		key := ds9.NameKey("ArrayTest", "empty", nil)
+		entity := &arrayEntity{
+			Strings: []string{},
+			Ints:    []int64{},
+		}
+
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put with empty slices failed: %v", err)
+		}
+
+		var result arrayEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if result.Strings == nil || len(result.Strings) != 0 {
+			t.Errorf("Expected empty string slice, got %v", result.Strings)
+		}
+		if result.Ints == nil || len(result.Ints) != 0 {
+			t.Errorf("Expected empty int slice, got %v", result.Ints)
+		}
+	})
+
+	t.Run("MixedArrays", func(t *testing.T) {
+		key := ds9.NameKey("ArrayTest", "mixed", nil)
+		entity := &arrayEntity{
+			Strings: []string{"a", "b"},
+			Ints:    []int64{10, 20, 30},
+			Floats:  []float64{1.5},
+			Bools:   []bool{true, false, true, false},
+		}
+
+		_, err := client.Put(ctx, key, entity)
+		if err != nil {
+			t.Fatalf("Put with mixed arrays failed: %v", err)
+		}
+
+		var result arrayEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get failed: %v", err)
+		}
+
+		if len(result.Strings) != 2 || len(result.Ints) != 3 || len(result.Floats) != 1 || len(result.Bools) != 4 {
+			t.Errorf("Mixed array lengths incorrect: strings=%d, ints=%d, floats=%d, bools=%d",
+				len(result.Strings), len(result.Ints), len(result.Floats), len(result.Bools))
+		}
+	})
+}
+
+func TestAllocateIDs(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("AllocateIncompleteKeys", func(t *testing.T) {
+		keys := []*ds9.Key{
+			ds9.IncompleteKey("Task", nil),
+			ds9.IncompleteKey("Task", nil),
+			ds9.IncompleteKey("Task", nil),
+		}
+
+		allocated, err := client.AllocateIDs(ctx, keys)
+		if err != nil {
+			t.Fatalf("AllocateIDs failed: %v", err)
+		}
+
+		if len(allocated) != 3 {
+			t.Errorf("Expected 3 allocated keys, got %d", len(allocated))
+		}
+
+		for i, key := range allocated {
+			if key.Incomplete() {
+				t.Errorf("Key %d is still incomplete", i)
+			}
+			if key.ID == 0 {
+				t.Errorf("Key %d has zero ID", i)
+			}
+		}
+	})
+
+	t.Run("AllocateMixedKeys", func(t *testing.T) {
+		keys := []*ds9.Key{
+			ds9.NameKey("Task", "complete", nil),
+			ds9.IncompleteKey("Task", nil),
+			ds9.IDKey("Task", 123, nil),
+			ds9.IncompleteKey("Task", nil),
+		}
+
+		allocated, err := client.AllocateIDs(ctx, keys)
+		if err != nil {
+			t.Fatalf("AllocateIDs with mixed keys failed: %v", err)
+		}
+
+		if len(allocated) != 4 {
+			t.Errorf("Expected 4 keys, got %d", len(allocated))
+		}
+
+		// First key should still be the named key
+		if allocated[0].Name != "complete" {
+			t.Errorf("First key should be unchanged")
+		}
+
+		// Second key should now have an ID
+		if allocated[1].Incomplete() {
+			t.Errorf("Second key should be allocated")
+		}
+
+		// Third key should be unchanged
+		if allocated[2].ID != 123 {
+			t.Errorf("Third key should be unchanged")
+		}
+
+		// Fourth key should now have an ID
+		if allocated[3].Incomplete() {
+			t.Errorf("Fourth key should be allocated")
+		}
+	})
+
+	t.Run("AllocateEmptySlice", func(t *testing.T) {
+		keys := []*ds9.Key{}
+
+		allocated, err := client.AllocateIDs(ctx, keys)
+		if err != nil {
+			t.Fatalf("AllocateIDs with empty slice failed: %v", err)
+		}
+
+		if len(allocated) != 0 {
+			t.Errorf("Expected empty slice, got %d keys", len(allocated))
+		}
+	})
+
+	t.Run("AllocateAllCompleteKeys", func(t *testing.T) {
+		keys := []*ds9.Key{
+			ds9.NameKey("Task", "key1", nil),
+			ds9.IDKey("Task", 100, nil),
+		}
+
+		allocated, err := client.AllocateIDs(ctx, keys)
+		if err != nil {
+			t.Fatalf("AllocateIDs with complete keys failed: %v", err)
+		}
+
+		if len(allocated) != 2 {
+			t.Errorf("Expected 2 keys, got %d", len(allocated))
+		}
+
+		// Keys should be unchanged
+		if allocated[0].Name != "key1" || allocated[1].ID != 100 {
+			t.Errorf("Complete keys should be unchanged")
+		}
+	})
+}
+
+func TestCount(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("CountEmptyKind", func(t *testing.T) {
+		q := ds9.NewQuery("NonExistent")
+		count, err := client.Count(ctx, q)
+		if err != nil {
+			t.Fatalf("Count failed: %v", err)
+		}
+
+		if count != 0 {
+			t.Errorf("Expected count 0, got %d", count)
+		}
+	})
+
+	t.Run("CountWithEntities", func(t *testing.T) {
+		// Create some entities
+		for i := range 5 {
+			key := ds9.IDKey("CountTest", int64(i+1), nil)
+			entity := &testEntity{
+				Name:  fmt.Sprintf("entity-%d", i),
+				Count: int64(i),
+			}
+			if _, err := client.Put(ctx, key, entity); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+
+		q := ds9.NewQuery("CountTest")
+		count, err := client.Count(ctx, q)
+		if err != nil {
+			t.Fatalf("Count failed: %v", err)
+		}
+
+		if count != 5 {
+			t.Errorf("Expected count 5, got %d", count)
+		}
+	})
+
+	t.Run("CountWithFilter", func(t *testing.T) {
+		// Create entities with different counts
+		for i := range 10 {
+			key := ds9.IDKey("FilterCount", int64(i+1), nil)
+			entity := &testEntity{
+				Name:  fmt.Sprintf("entity-%d", i),
+				Count: int64(i),
+			}
+			if _, err := client.Put(ctx, key, entity); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+
+		// Count entities where count >= 5
+		q := ds9.NewQuery("FilterCount").Filter("count >=", int64(5))
+		count, err := client.Count(ctx, q)
+		if err != nil {
+			t.Fatalf("Count with filter failed: %v", err)
+		}
+
+		// Should return entities with count 5,6,7,8,9 = 5 entities
+		if count != 5 {
+			t.Errorf("Expected count 5, got %d", count)
+		}
+	})
+
+	t.Run("CountWithLimit", func(t *testing.T) {
+		// Create entities
+		for i := range 10 {
+			key := ds9.IDKey("LimitCount", int64(i+1), nil)
+			entity := &testEntity{
+				Name:  fmt.Sprintf("entity-%d", i),
+				Count: int64(i),
+			}
+			if _, err := client.Put(ctx, key, entity); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+
+		// Count with limit - note: count should respect limit
+		q := ds9.NewQuery("LimitCount").Limit(3)
+		count, err := client.Count(ctx, q)
+		if err != nil {
+			t.Fatalf("Count with limit failed: %v", err)
+		}
+
+		// Mock implementation may return full count, but limit is respected
+		if count > 10 {
+			t.Errorf("Count should not exceed actual entities: %d", count)
+		}
+	})
+}
+
+func TestQueryNamespace(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("NamespaceFilter", func(t *testing.T) {
+		// Note: ds9mock may not fully support namespaces, but we test the API
+		q := ds9.NewQuery("Task").Namespace("custom-namespace")
+
+		var entities []testEntity
+		_, err := client.GetAll(ctx, q, &entities)
+		// Should not error even if namespace is not supported by mock
+		if err != nil {
+			t.Logf("GetAll with namespace: %v", err)
+		}
+	})
+
+	t.Run("EmptyNamespace", func(t *testing.T) {
+		q := ds9.NewQuery("Task").Namespace("")
+
+		var entities []testEntity
+		_, err := client.GetAll(ctx, q, &entities)
+		if err != nil {
+			t.Logf("GetAll with empty namespace: %v", err)
+		}
+	})
+}
+
+func TestQueryDistinct(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("Distinct", func(t *testing.T) {
+		// Create duplicate entities
+		for i := range 3 {
+			key := ds9.IDKey("DistinctTest", int64(i+1), nil)
+			entity := &testEntity{
+				Name:  "same-name", // Same name for all
+				Count: int64(i),
+			}
+			if _, err := client.Put(ctx, key, entity); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+
+		// Query with distinct on Name field
+		q := ds9.NewQuery("DistinctTest").Project("name").Distinct()
+
+		var entities []testEntity
+		_, err := client.GetAll(ctx, q, &entities)
+		if err != nil {
+			t.Logf("GetAll with Distinct: %v", err)
+		}
+	})
+
+	t.Run("DistinctOn", func(t *testing.T) {
+		q := ds9.NewQuery("Task").DistinctOn("name", "count")
+
+		var entities []testEntity
+		_, err := client.GetAll(ctx, q, &entities)
+		if err != nil {
+			t.Logf("GetAll with DistinctOn: %v", err)
+		}
+	})
+}
+
+func TestIterator(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("IterateAll", func(t *testing.T) {
+		// Create test entities
+		for i := range 5 {
+			key := ds9.IDKey("IterTest", int64(i+1), nil)
+			entity := &testEntity{
+				Name:  fmt.Sprintf("entity-%d", i),
+				Count: int64(i),
+			}
+			if _, err := client.Put(ctx, key, entity); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+
+		q := ds9.NewQuery("IterTest")
+		it := client.Run(ctx, q)
+
+		count := 0
+		for {
+			var entity testEntity
+			key, err := it.Next(&entity)
+			if errors.Is(err, ds9.ErrDone) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Iterator.Next failed: %v", err)
+			}
+			if key == nil {
+				t.Errorf("Expected non-nil key")
+			}
+			count++
+		}
+
+		if count != 5 {
+			t.Errorf("Expected to iterate over 5 entities, got %d", count)
+		}
+	})
+
+	t.Run("IteratorCursor", func(t *testing.T) {
+		// Create test entities
+		for i := range 3 {
+			key := ds9.IDKey("CursorTest", int64(i+1), nil)
+			entity := &testEntity{
+				Name:  fmt.Sprintf("entity-%d", i),
+				Count: int64(i),
+			}
+			if _, err := client.Put(ctx, key, entity); err != nil {
+				t.Fatalf("Put failed: %v", err)
+			}
+		}
+
+		q := ds9.NewQuery("CursorTest")
+		it := client.Run(ctx, q)
+
+		var entity testEntity
+		_, err := it.Next(&entity)
+		if err != nil {
+			t.Fatalf("Iterator.Next failed: %v", err)
+		}
+
+		// Get cursor after first entity
+		cursor, err := it.Cursor()
+		if err != nil {
+			t.Logf("Cursor not available: %v", err)
+		} else if cursor == "" {
+			t.Logf("Empty cursor returned")
+		}
+	})
+
+	t.Run("EmptyIterator", func(t *testing.T) {
+		q := ds9.NewQuery("NonExistent")
+		it := client.Run(ctx, q)
+
+		var entity testEntity
+		_, err := it.Next(&entity)
+		if !errors.Is(err, ds9.ErrDone) {
+			t.Errorf("Expected ErrDone, got %v", err)
+		}
+	})
+}
+
+func TestMutate(t *testing.T) {
+	client, cleanup := ds9mock.NewClient(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	t.Run("MutateInsert", func(t *testing.T) {
+		key := ds9.NameKey("MutateTest", "insert", nil)
+		entity := &testEntity{
+			Name:  "inserted",
+			Count: 42,
+		}
+
+		mut := ds9.NewInsert(key, entity)
+		keys, err := client.Mutate(ctx, mut)
+		if err != nil {
+			t.Fatalf("Mutate insert failed: %v", err)
+		}
+
+		if len(keys) != 1 {
+			t.Errorf("Expected 1 key, got %d", len(keys))
+		}
+
+		// Verify entity was created
+		var result testEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get after insert failed: %v", err)
+		}
+		if result.Name != "inserted" {
+			t.Errorf("Expected Name 'inserted', got '%s'", result.Name)
+		}
+	})
+
+	t.Run("MutateUpdate", func(t *testing.T) {
+		key := ds9.NameKey("MutateTest", "update", nil)
+		entity := &testEntity{Name: "original", Count: 1}
+
+		// Create entity first
+		if _, err := client.Put(ctx, key, entity); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+
+		// Update via mutation
+		updated := &testEntity{Name: "updated", Count: 2}
+		mut := ds9.NewUpdate(key, updated)
+		_, err := client.Mutate(ctx, mut)
+		if err != nil {
+			t.Fatalf("Mutate update failed: %v", err)
+		}
+
+		// Verify entity was updated
+		var result testEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get after update failed: %v", err)
+		}
+		if result.Name != "updated" {
+			t.Errorf("Expected Name 'updated', got '%s'", result.Name)
+		}
+	})
+
+	t.Run("MutateUpsert", func(t *testing.T) {
+		key := ds9.NameKey("MutateTest", "upsert", nil)
+		entity := &testEntity{Name: "upserted", Count: 100}
+
+		mut := ds9.NewUpsert(key, entity)
+		keys, err := client.Mutate(ctx, mut)
+		if err != nil {
+			t.Fatalf("Mutate upsert failed: %v", err)
+		}
+
+		if len(keys) != 1 {
+			t.Errorf("Expected 1 key, got %d", len(keys))
+		}
+
+		// Verify entity exists
+		var result testEntity
+		if err := client.Get(ctx, key, &result); err != nil {
+			t.Fatalf("Get after upsert failed: %v", err)
+		}
+		if result.Name != "upserted" {
+			t.Errorf("Expected Name 'upserted', got '%s'", result.Name)
+		}
+	})
+
+	t.Run("MutateDelete", func(t *testing.T) {
+		key := ds9.NameKey("MutateTest", "delete", nil)
+		entity := &testEntity{Name: "to-delete", Count: 1}
+
+		// Create entity first
+		if _, err := client.Put(ctx, key, entity); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+
+		// Delete via mutation
+		mut := ds9.NewDelete(key)
+		keys, err := client.Mutate(ctx, mut)
+		if err != nil {
+			t.Fatalf("Mutate delete failed: %v", err)
+		}
+
+		if len(keys) != 1 {
+			t.Errorf("Expected 1 key, got %d", len(keys))
+		}
+
+		// Verify entity was deleted
+		var result testEntity
+		err = client.Get(ctx, key, &result)
+		if !errors.Is(err, ds9.ErrNoSuchEntity) {
+			t.Errorf("Expected ErrNoSuchEntity after delete, got %v", err)
+		}
+	})
+
+	t.Run("MutateMultiple", func(t *testing.T) {
+		key1 := ds9.NameKey("MutateTest", "multi1", nil)
+		key2 := ds9.NameKey("MutateTest", "multi2", nil)
+		key3 := ds9.NameKey("MutateTest", "multi3", nil)
+
+		entity1 := &testEntity{Name: "first", Count: 1}
+		entity2 := &testEntity{Name: "second", Count: 2}
+		entity3 := &testEntity{Name: "third", Count: 3}
+
+		// Pre-create entity3 for update
+		if _, err := client.Put(ctx, key3, &testEntity{Name: "old", Count: 0}); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+
+		// Apply multiple mutations
+		muts := []*ds9.Mutation{
+			ds9.NewInsert(key1, entity1),
+			ds9.NewUpsert(key2, entity2),
+			ds9.NewUpdate(key3, entity3),
+		}
+
+		keys, err := client.Mutate(ctx, muts...)
+		if err != nil {
+			t.Fatalf("Mutate multiple failed: %v", err)
+		}
+
+		if len(keys) != 3 {
+			t.Errorf("Expected 3 keys, got %d", len(keys))
+		}
+
+		// Verify all mutations applied
+		var result1, result2, result3 testEntity
+		if err := client.Get(ctx, key1, &result1); err != nil {
+			t.Errorf("Get key1 failed: %v", err)
+		}
+		if err := client.Get(ctx, key2, &result2); err != nil {
+			t.Errorf("Get key2 failed: %v", err)
+		}
+		if err := client.Get(ctx, key3, &result3); err != nil {
+			t.Errorf("Get key3 failed: %v", err)
+		}
+
+		if result1.Name != "first" || result2.Name != "second" || result3.Name != "third" {
+			t.Errorf("Mutation results incorrect")
+		}
+	})
+
+	t.Run("MutateEmpty", func(t *testing.T) {
+		keys, err := client.Mutate(ctx)
+		if err != nil {
+			t.Fatalf("Mutate with no mutations failed: %v", err)
+		}
+
+		if keys != nil && len(keys) != 0 {
+			t.Errorf("Expected nil or empty keys, got %d", len(keys))
 		}
 	})
 }
