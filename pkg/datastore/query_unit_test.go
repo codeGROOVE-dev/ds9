@@ -1,4 +1,4 @@
-package ds9
+package datastore
 
 import (
 	"testing"
@@ -286,5 +286,27 @@ func TestBuildQueryMapKeysOnly(t *testing.T) {
 	projection, ok := queryMap["projection"].([]map[string]any)
 	if !ok || len(projection) == 0 {
 		t.Fatal("Expected projection in query map for keys-only")
+	}
+}
+
+func TestQueryStart(t *testing.T) {
+	cursor := Cursor("test-start-cursor")
+	q := NewQuery("TestKind").Start(cursor)
+
+	// Start returns a new Query with the cursor set
+	// We can verify it's chainable and doesn't panic
+	if q == nil {
+		t.Error("Expected non-nil query")
+	}
+}
+
+func TestQueryEnd(t *testing.T) {
+	cursor := Cursor("test-end-cursor")
+	q := NewQuery("TestKind").End(cursor)
+
+	// End returns a new Query with the cursor set
+	// We can verify it's chainable and doesn't panic
+	if q == nil {
+		t.Error("Expected non-nil query")
 	}
 }
