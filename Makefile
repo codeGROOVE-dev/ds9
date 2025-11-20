@@ -1,7 +1,7 @@
 .PHONY: test integration lint build clean
 
 test:
-	go test -v -race -cover ./...
+	go test -race -cover ./...
 
 DS9_TEST_PROJECT ?= integration-testing-476513
 DS9_TEST_DATABASE ?= ds9-test
