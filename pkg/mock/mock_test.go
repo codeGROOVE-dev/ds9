@@ -107,7 +107,7 @@ func TestMockMultiOperations(t *testing.T) {
 	}
 
 	// Test GetMulti
-	var retrieved []TestEntity
+	retrieved := make([]TestEntity, len(keys))
 	err = client.GetMulti(ctx, keys, &retrieved)
 	if err != nil {
 		t.Fatalf("GetMulti failed: %v", err)
@@ -133,6 +133,7 @@ func TestMockMultiOperations(t *testing.T) {
 	}
 
 	// Verify all deleted
+	retrieved = make([]TestEntity, len(keys))
 	err = client.GetMulti(ctx, keys, &retrieved)
 	if err == nil {
 		t.Error("expected error after DeleteMulti, got nil")

@@ -50,8 +50,13 @@ func TestMultiGetNotFound(t *testing.T) {
 	var retrieved []testEntity
 	err = client.GetMulti(ctx, keys, &retrieved)
 
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
-		t.Errorf("expected datastore.ErrNoSuchEntity when some keys missing, got %v", err)
+	// Should get MultiError with some ErrNoSuchEntity
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
+		t.Fatalf("expected MultiError when some keys missing, got %T: %v", err, err)
+	}
+	if !errors.Is(multiErr[1], datastore.ErrNoSuchEntity) {
+		t.Errorf("expected ErrNoSuchEntity at index 1, got %v", multiErr[1])
 	}
 }
 
@@ -213,7 +218,8 @@ func TestMultiGetWithDatabaseID(t *testing.T) {
 	var entities []testEntity
 	err = client.GetMulti(ctx, keys, &entities)
 	// Expect error since entities don't exist
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
 		t.Errorf("expected datastore.ErrNoSuchEntity, got: %v", err)
 	}
 }
@@ -273,7 +279,8 @@ func TestGetMultiMixedResults(t *testing.T) {
 	var retrieved []testEntity
 
 	err = client.GetMulti(ctx, keys, &retrieved)
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
 		t.Errorf("expected datastore.ErrNoSuchEntity for mixed results, got: %v", err)
 	}
 }
@@ -293,7 +300,8 @@ func TestGetMultiAllMissing(t *testing.T) {
 	var entities []testEntity
 	err := client.GetMulti(ctx, keys, &entities)
 
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
 		t.Errorf("expected datastore.ErrNoSuchEntity when all keys missing, got: %v", err)
 	}
 }
@@ -451,7 +459,8 @@ func TestGetMultiWithNilInResults(t *testing.T) {
 	var entities []testEntity
 	err = client.GetMulti(ctx, keys, &entities)
 
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
 		t.Errorf("expected datastore.ErrNoSuchEntity when some keys missing, got: %v", err)
 	}
 }

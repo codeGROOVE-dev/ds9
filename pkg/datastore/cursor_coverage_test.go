@@ -115,7 +115,7 @@ func TestCursorWithLimitedResults(t *testing.T) {
 	for {
 		var entity testEntity
 		_, err := it.Next(&entity)
-		if errors.Is(err, datastore.ErrDone) {
+		if errors.Is(err, datastore.Done) {
 			break
 		}
 		if err != nil {

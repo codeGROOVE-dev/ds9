@@ -64,7 +64,7 @@ func TestIteratorMultipleFetches(t *testing.T) {
 			Time  time.Time
 		}
 		_, err := it.Next(&entity)
-		if errors.Is(err, ErrDone) {
+		if errors.Is(err, Done) {
 			break
 		}
 		if err != nil {
@@ -209,7 +209,7 @@ func TestIteratorKeysOnly(t *testing.T) {
 			Data string
 		}
 		key, err := it.Next(&entity)
-		if errors.Is(err, ErrDone) {
+		if errors.Is(err, Done) {
 			break
 		}
 		if err != nil {

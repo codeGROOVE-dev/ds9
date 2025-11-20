@@ -80,8 +80,19 @@ func TestMultiDelete(t *testing.T) {
 	// Verify they're gone by trying to get them
 	var retrieved []testEntity
 	err = client.GetMulti(ctx, keys, &retrieved)
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
-		t.Errorf("expected datastore.ErrNoSuchEntity after delete, got %v", err)
+	if err == nil {
+		t.Error("expected error after delete, got nil")
+	}
+	// Should get MultiError with all ErrNoSuchEntity
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
+		t.Errorf("expected MultiError after delete, got %T", err)
+	} else {
+		for i, e := range multiErr {
+			if !errors.Is(e, datastore.ErrNoSuchEntity) {
+				t.Errorf("expected ErrNoSuchEntity at index %d, got %v", i, e)
+			}
+		}
 	}
 }
 
@@ -94,8 +105,9 @@ func TestMultiDeleteEmptyKeys(t *testing.T) {
 	var keys []*datastore.Key
 
 	err := client.DeleteMulti(ctx, keys)
-	if err == nil {
-		t.Error("expected error for empty keys, got nil")
+	// Empty keys should return nil (matches official API)
+	if err != nil {
+		t.Errorf("expected nil for empty keys, got %v", err)
 	}
 }
 
@@ -134,10 +146,10 @@ func TestMultiDeleteEmptySlice(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Call MultiDelete with empty slice - should return error
+	// Call MultiDelete with empty slice - should return nil (matches official API)
 	err := client.DeleteMulti(ctx, []*datastore.Key{})
-	if err == nil {
-		t.Error("expected error for MultiDelete with empty keys, got nil")
+	if err != nil {
+		t.Errorf("expected nil for empty keys, got %v", err)
 	}
 }
 
@@ -387,8 +399,9 @@ func TestDeleteMultiEmptySlice(t *testing.T) {
 	ctx := context.Background()
 
 	err := client.DeleteMulti(ctx, []*datastore.Key{})
-	if err == nil {
-		t.Error("expected error for empty keys")
+	// Empty keys should return nil (matches official API)
+	if err != nil {
+		t.Errorf("expected nil for empty keys, got %v", err)
 	}
 }
 
@@ -524,8 +537,19 @@ func TestDeleteMultiPartialSuccess(t *testing.T) {
 	// Verify deletion
 	var retrieved []testEntity
 	err = client.GetMulti(ctx, keys, &retrieved)
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
-		t.Errorf("expected datastore.ErrNoSuchEntity after delete, got: %v", err)
+	if err == nil {
+		t.Error("expected error after delete, got nil")
+	}
+	// Should get MultiError with all ErrNoSuchEntity
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
+		t.Errorf("expected MultiError after delete, got %T", err)
+	} else {
+		for i, e := range multiErr {
+			if !errors.Is(e, datastore.ErrNoSuchEntity) {
+				t.Errorf("expected ErrNoSuchEntity at index %d, got %v", i, e)
+			}
+		}
 	}
 }
 

@@ -1,8 +1,15 @@
 # ds9
 
-Zero-dependency Google Cloud Datastore client for Go. Drop-in replacement for `cloud.google.com/go/datastore` basic operations. In-memory mock implementation. Comprehensive testing.
+<img src="media/logo-small.png" alt="ds9 logo" align="right">
 
-**Why?** The official client has 50+ dependencies. `ds9` uses only Go stdlib—ideal for lightweight services and minimizing supply chain risk.
+[![Go Reference](https://pkg.go.dev/badge/github.com/codeGROOVE-dev/ds9.svg)](https://pkg.go.dev/github.com/codeGROOVE-dev/ds9)
+[![Go Report Card](https://goreportcard.com/badge/github.com/codeGROOVE-dev/ds9)](https://goreportcard.com/report/github.com/codeGROOVE-dev/ds9)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/ds9)](go.mod)
+
+Zero-dependency Google Cloud Datastore client for Go. Drop-in replacement for `cloud.google.com/go/datastore` with CRUD, transactions, queries, cursors, and mutations. In-memory mock implementation. Comprehensive testing.
+
+**Why?** The official client has 50+ dependencies. `ds9` has zero—ideal for lightweight services and minimizing supply chain risk.
 
 ## Installation
 
@@ -36,6 +43,7 @@ Just switch the import path from `cloud.google.com/go/datastore` to `github.com/
 - **Cursors**: Start, End, DecodeCursor
 - **Keys**: NameKey, IDKey, IncompleteKey, AllocateIDs, parent keys
 - **Mutations**: NewInsert, NewUpdate, NewUpsert, NewDelete, Mutate
+- **Errors**: ErrNoSuchEntity, ErrInvalidKey, ErrInvalidEntityType, ErrConcurrentTransaction, Done, MultiError
 - **Types**: string, int, int64, int32, bool, float64, time.Time, slices ([]string, []int64, []int, []float64, []bool)
 
 **Unsupported Features**
@@ -46,6 +54,6 @@ These features are unsupported just because we haven't found a use for the featu
 
 ## Testing
 
-* Use `github.com/codeGROOVE-dev/ds9/pkg/mock` package for in-memory testing. It should work even if you choose not to use ds9.
+* Use `datastore.NewMockClient(t)` for in-memory testing. Works even if you're still using the official client.
 * See [TESTING.md](TESTING.md) for integration tests.
 * We aim to maintain 85% test coverage - please don't send PRs without tests.

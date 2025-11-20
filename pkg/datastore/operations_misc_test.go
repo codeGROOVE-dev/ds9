@@ -213,8 +213,19 @@ func TestLargeEntityBatch(t *testing.T) {
 	// Verify deletion
 	var retrieved2 []testEntity
 	err = client.GetMulti(ctx, keys, &retrieved2)
-	if !errors.Is(err, datastore.ErrNoSuchEntity) {
-		t.Errorf("expected datastore.ErrNoSuchEntity after batch delete, got %v", err)
+	if err == nil {
+		t.Fatal("expected error after batch delete, got nil")
+	}
+
+	var multiErr datastore.MultiError
+	if !errors.As(err, &multiErr) {
+		t.Fatalf("expected MultiError after batch delete, got %T: %v", err, err)
+	}
+
+	for i, e := range multiErr {
+		if !errors.Is(e, datastore.ErrNoSuchEntity) {
+			t.Errorf("expected ErrNoSuchEntity at index %d, got %v", i, e)
+		}
 	}
 }
 

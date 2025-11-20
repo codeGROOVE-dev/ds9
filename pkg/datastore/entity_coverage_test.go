@@ -212,7 +212,7 @@ func TestIterator_Coverage(t *testing.T) {
 			Time  time.Time
 		}
 		_, err := it.Next(&entity)
-		if errors.Is(err, ErrDone) {
+		if errors.Is(err, Done) {
 			break
 		}
 		if err != nil {

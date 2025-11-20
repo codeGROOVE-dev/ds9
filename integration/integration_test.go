@@ -186,8 +186,19 @@ func TestIntegrationBatchOperations(t *testing.T) {
 
 		var retrieved []integrationEntity
 		err = client.GetMulti(ctx, keys, &retrieved)
-		if !errors.Is(err, datastore.ErrNoSuchEntity) {
-			t.Errorf("expected datastore.ErrNoSuchEntity after DeleteMulti, got %v", err)
+		if err == nil {
+			t.Fatal("expected error after DeleteMulti, got nil")
+		}
+
+		var multiErr datastore.MultiError
+		if !errors.As(err, &multiErr) {
+			t.Fatalf("expected MultiError after DeleteMulti, got %T: %v", err, err)
+		}
+
+		for i, e := range multiErr {
+			if !errors.Is(e, datastore.ErrNoSuchEntity) {
+				t.Errorf("expected ErrNoSuchEntity at index %d, got %v", i, e)
+			}
 		}
 	})
 }
