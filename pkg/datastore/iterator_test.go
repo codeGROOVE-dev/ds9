@@ -35,7 +35,7 @@ func TestIterator(t *testing.T) {
 		for {
 			var entity testEntity
 			key, err := it.Next(&entity)
-			if errors.Is(err, datastore.ErrDone) {
+			if errors.Is(err, datastore.Done) {
 				break
 			}
 			if err != nil {
@@ -89,8 +89,8 @@ func TestIterator(t *testing.T) {
 
 		var entity testEntity
 		_, err := it.Next(&entity)
-		if !errors.Is(err, datastore.ErrDone) {
-			t.Errorf("Expected datastore.ErrDone, got %v", err)
+		if !errors.Is(err, datastore.Done) {
+			t.Errorf("Expected datastore.Done, got %v", err)
 		}
 	})
 }

@@ -19,7 +19,11 @@ func (c *Client) Get(ctx context.Context, key *Key, dst any) error {
 
 	if key == nil {
 		c.logger.WarnContext(ctx, "Get called with nil key")
-		return errors.New("key cannot be nil")
+		return ErrInvalidKey
+	}
+
+	if dst == nil {
+		return fmt.Errorf("%w: dst cannot be nil", ErrInvalidEntityType)
 	}
 
 	c.logger.DebugContext(ctx, "getting entity", "kind", key.Kind, "name", key.Name, "id", key.ID)
@@ -78,7 +82,7 @@ func (c *Client) Put(ctx context.Context, key *Key, src any) (*Key, error) {
 	ctx = c.withClientConfig(ctx)
 	if key == nil {
 		c.logger.WarnContext(ctx, "Put called with nil key")
-		return nil, errors.New("key cannot be nil")
+		return nil, ErrInvalidKey
 	}
 
 	c.logger.DebugContext(ctx, "putting entity", "kind", key.Kind, "name", key.Name, "id", key.ID)
@@ -125,7 +129,7 @@ func (c *Client) Delete(ctx context.Context, key *Key) error {
 	ctx = c.withClientConfig(ctx)
 	if key == nil {
 		c.logger.WarnContext(ctx, "Delete called with nil key")
-		return errors.New("key cannot be nil")
+		return ErrInvalidKey
 	}
 
 	c.logger.DebugContext(ctx, "deleting entity", "kind", key.Kind, "name", key.Name, "id", key.ID)
@@ -163,16 +167,38 @@ func (c *Client) Delete(ctx context.Context, key *Key) error {
 
 // GetMulti retrieves multiple entities by their keys.
 // dst must be a pointer to a slice of structs.
-// Returns ErrNoSuchEntity if any key is not found.
+// Returns MultiError with ErrNoSuchEntity for missing keys, or other errors for specific items.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
 		c.logger.WarnContext(ctx, "GetMulti called with no keys")
-		return errors.New("keys cannot be empty")
+		return fmt.Errorf("%w: keys cannot be empty", ErrInvalidKey)
 	}
 
 	c.logger.DebugContext(ctx, "getting multiple entities", "count", len(keys))
+
+	// Validate keys first
+	multiErr := make(MultiError, len(keys))
+	hasErr := false
+	for i, key := range keys {
+		if key == nil {
+			c.logger.WarnContext(ctx, "GetMulti called with nil key", "index", i)
+			multiErr[i] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, i)
+			hasErr = true
+		}
+	}
+	if hasErr {
+		return multiErr
+	}
+
+	// Decode into slice
+	dstValue := reflect.ValueOf(dst)
+	if dstValue.Kind() != reflect.Ptr || dstValue.Elem().Kind() != reflect.Slice {
+		return fmt.Errorf("%w: dst must be a pointer to slice", ErrInvalidEntityType)
+	}
+
+	sliceType := dstValue.Elem().Type()
 
 	token, err := auth.AccessToken(ctx)
 	if err != nil {
@@ -183,10 +209,6 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 	// Build keys array
 	jsonKeys := make([]map[string]any, len(keys))
 	for i, key := range keys {
-		if key == nil {
-			c.logger.WarnContext(ctx, "GetMulti called with nil key", "index", i)
-			return fmt.Errorf("key at index %d cannot be nil", i)
-		}
 		jsonKeys[i] = keyToJSON(key)
 	}
 
@@ -225,46 +247,89 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if len(result.Missing) > 0 {
-		c.logger.DebugContext(ctx, "some entities not found", "missing_count", len(result.Missing))
-		return ErrNoSuchEntity
+	// Create a map of keys to their indices
+	keyMap := make(map[string][]int)
+	for i, key := range keys {
+		keyStr := key.String()
+		keyMap[keyStr] = append(keyMap[keyStr], i)
 	}
 
-	// Decode into slice
-	v := reflect.ValueOf(dst)
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
-		return errors.New("dst must be a pointer to slice")
+	// Create slice to hold results, sized to match keys
+	resultSlice := reflect.MakeSlice(sliceType, len(keys), len(keys))
+
+	// Mark all as not found initially
+	for i := range keys {
+		multiErr[i] = ErrNoSuchEntity
 	}
 
-	sliceType := v.Elem().Type()
-	elemType := sliceType.Elem()
-
-	// Create new slice of correct size
-	slice := reflect.MakeSlice(sliceType, 0, len(result.Found))
-
+	// Process found entities
 	for _, found := range result.Found {
-		elem := reflect.New(elemType).Elem()
-		if err := decodeEntity(found.Entity, elem.Addr().Interface()); err != nil {
-			c.logger.ErrorContext(ctx, "failed to decode entity", "error", err)
+		key, err := keyFromJSON(found.Entity["key"])
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to parse key from response", "error", err)
 			return err
 		}
-		slice = reflect.Append(slice, elem)
+
+		keyStr := key.String()
+		indices, ok := keyMap[keyStr]
+		if !ok {
+			continue
+		}
+
+		for _, index := range indices {
+			elem := resultSlice.Index(index)
+			if err := decodeEntity(found.Entity, elem.Addr().Interface()); err != nil {
+				c.logger.ErrorContext(ctx, "failed to decode entity", "index", index, "error", err)
+				multiErr[index] = err
+				hasErr = true
+			} else {
+				multiErr[index] = nil // Success
+			}
+		}
 	}
 
-	v.Elem().Set(slice)
-	c.logger.DebugContext(ctx, "entities retrieved successfully", "count", len(result.Found))
+	// Process missing entities - they already have ErrNoSuchEntity set
+	for _, missing := range result.Missing {
+		key, err := keyFromJSON(missing.Entity["key"])
+		if err != nil {
+			continue
+		}
+		keyStr := key.String()
+		if indices, ok := keyMap[keyStr]; ok {
+			for range indices {
+				hasErr = true
+				// multiErr[index] already set to ErrNoSuchEntity above
+			}
+		}
+	}
+
+	// Check if any entities are still marked as missing
+	for i, e := range multiErr {
+		if errors.Is(e, ErrNoSuchEntity) {
+			hasErr = true
+			c.logger.DebugContext(ctx, "entity not found", "index", i, "key", keys[i].String())
+		}
+	}
+
+	// Set the result slice
+	dstValue.Elem().Set(resultSlice)
+
+	if hasErr {
+		return multiErr
+	}
+
+	c.logger.DebugContext(ctx, "entities retrieved successfully", "count", len(keys))
 	return nil
 }
 
 // PutMulti stores multiple entities with their keys.
 // keys and src must have the same length.
-// Returns the keys (same as input) and any error.
+// Returns the keys (same as input) and MultiError if any operations failed.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, error) {
 	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
-		c.logger.WarnContext(ctx, "PutMulti called with no keys")
-		return nil, errors.New("keys cannot be empty")
+		return nil, nil
 	}
 
 	c.logger.DebugContext(ctx, "putting multiple entities", "count", len(keys))
@@ -275,36 +340,48 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Slice {
-		return nil, errors.New("src must be a slice")
+		return nil, fmt.Errorf("%w: src must be a slice", ErrInvalidEntityType)
 	}
 
 	if v.Len() != len(keys) {
 		return nil, fmt.Errorf("keys and src length mismatch: %d != %d", len(keys), v.Len())
 	}
 
-	token, err := auth.AccessToken(ctx)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
-		return nil, fmt.Errorf("failed to get access token: %w", err)
-	}
-
-	// Build mutations
+	// Validate keys and encode entities upfront
+	multiErr := make(MultiError, len(keys))
+	hasErr := false
 	mutations := make([]map[string]any, len(keys))
+
 	for i, key := range keys {
 		if key == nil {
 			c.logger.WarnContext(ctx, "PutMulti called with nil key", "index", i)
-			return nil, fmt.Errorf("key at index %d cannot be nil", i)
+			multiErr[i] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, i)
+			hasErr = true
+			continue
 		}
 
 		entity, err := encodeEntity(key, v.Index(i).Interface())
 		if err != nil {
 			c.logger.ErrorContext(ctx, "failed to encode entity", "error", err, "index", i)
-			return nil, fmt.Errorf("failed to encode entity at index %d: %w", i, err)
+			multiErr[i] = err
+			hasErr = true
+			continue
 		}
 
 		mutations[i] = map[string]any{
 			"upsert": entity,
 		}
+	}
+
+	// If encoding failed, return MultiError
+	if hasErr {
+		return nil, multiErr
+	}
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
 
 	reqBody := map[string]any{
@@ -333,33 +410,43 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 }
 
 // DeleteMulti deletes multiple entities with their keys.
+// Returns MultiError if any keys are invalid.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 	ctx = c.withClientConfig(ctx)
 	if len(keys) == 0 {
-		c.logger.WarnContext(ctx, "DeleteMulti called with no keys")
-		return errors.New("keys cannot be empty")
+		return nil
 	}
 
 	c.logger.DebugContext(ctx, "deleting multiple entities", "count", len(keys))
 
-	token, err := auth.AccessToken(ctx)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
-		return fmt.Errorf("failed to get access token: %w", err)
-	}
-
-	// Build mutations
+	// Validate keys upfront
+	multiErr := make(MultiError, len(keys))
+	hasErr := false
 	mutations := make([]map[string]any, len(keys))
+
 	for i, key := range keys {
 		if key == nil {
 			c.logger.WarnContext(ctx, "DeleteMulti called with nil key", "index", i)
-			return fmt.Errorf("key at index %d cannot be nil", i)
+			multiErr[i] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, i)
+			hasErr = true
+			continue
 		}
 
 		mutations[i] = map[string]any{
 			"delete": keyToJSON(key),
 		}
+	}
+
+	// If validation failed, return MultiError
+	if hasErr {
+		return multiErr
+	}
+
+	token, err := auth.AccessToken(ctx)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "failed to get access token", "error", err)
+		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
 	reqBody := map[string]any{

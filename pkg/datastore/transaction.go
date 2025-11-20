@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -302,7 +301,7 @@ func (c *Client) RunInTransaction(ctx context.Context, f func(*Transaction) erro
 // API compatible with cloud.google.com/go/datastore.
 func (tx *Transaction) Get(key *Key, dst any) error {
 	if key == nil {
-		return errors.New("key cannot be nil")
+		return ErrInvalidKey
 	}
 
 	token, err := auth.AccessToken(tx.ctx)
@@ -387,7 +386,7 @@ func (tx *Transaction) Get(key *Key, dst any) error {
 // Put stores an entity within the transaction.
 func (tx *Transaction) Put(key *Key, src any) (*Key, error) {
 	if key == nil {
-		return nil, errors.New("key cannot be nil")
+		return nil, ErrInvalidKey
 	}
 
 	// Encode the entity
@@ -411,7 +410,7 @@ func (tx *Transaction) Put(key *Key, src any) (*Key, error) {
 // API compatible with cloud.google.com/go/datastore.
 func (tx *Transaction) Delete(key *Key) error {
 	if key == nil {
-		return errors.New("key cannot be nil")
+		return ErrInvalidKey
 	}
 
 	// Create delete mutation
@@ -441,7 +440,7 @@ func (tx *Transaction) DeleteMulti(keys []*Key) error {
 func (tx *Transaction) GetMulti(keys []*Key, dst any) error {
 	dstVal := reflect.ValueOf(dst)
 	if dstVal.Kind() != reflect.Ptr || dstVal.Elem().Kind() != reflect.Slice {
-		return errors.New("dst must be a pointer to a slice")
+		return fmt.Errorf("%w: dst must be a pointer to a slice", ErrInvalidEntityType)
 	}
 
 	slice := dstVal.Elem()
@@ -476,7 +475,7 @@ func (tx *Transaction) GetMulti(keys []*Key, dst any) error {
 func (tx *Transaction) PutMulti(keys []*Key, src any) ([]*Key, error) {
 	srcVal := reflect.ValueOf(src)
 	if srcVal.Kind() != reflect.Slice {
-		return nil, errors.New("src must be a slice")
+		return nil, fmt.Errorf("%w: src must be a slice", ErrInvalidEntityType)
 	}
 
 	if len(keys) != srcVal.Len() {

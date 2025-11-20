@@ -434,7 +434,7 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 	// Verify dst is a pointer to slice
 	v := reflect.ValueOf(dst)
 	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Slice {
-		return nil, errors.New("dst must be a pointer to slice")
+		return nil, fmt.Errorf("%w: dst must be a pointer to slice", ErrInvalidEntityType)
 	}
 
 	sliceType := v.Elem().Type()

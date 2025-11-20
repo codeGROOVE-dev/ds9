@@ -146,8 +146,9 @@ func TestMultiPutEmptyKeys(t *testing.T) {
 	var keys []*datastore.Key
 
 	_, err := client.PutMulti(ctx, keys, entities)
-	if err == nil {
-		t.Error("expected error for empty keys, got nil")
+	// Empty keys should return nil (matches official API)
+	if err != nil {
+		t.Errorf("expected nil for empty keys, got %v", err)
 	}
 }
 
@@ -213,10 +214,10 @@ func TestMultiPutEmptySlices(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Call MultiPut with empty slices - should return error
+	// Call MultiPut with empty slices - should return nil (matches official API)
 	_, err := client.PutMulti(ctx, []*datastore.Key{}, []testEntity{})
-	if err == nil {
-		t.Error("expected error for MultiPut with empty keys, got nil")
+	if err != nil {
+		t.Errorf("expected nil for empty keys, got %v", err)
 	}
 }
 
@@ -304,10 +305,10 @@ func TestPutMultiEmptySlice(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Empty slices
+	// Empty slices - should return nil (matches official API)
 	_, err := client.PutMulti(ctx, []*datastore.Key{}, []testEntity{})
-	if err == nil {
-		t.Error("expected error for empty slices")
+	if err != nil {
+		t.Errorf("expected nil for empty slices, got %v", err)
 	}
 }
 

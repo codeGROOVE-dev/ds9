@@ -193,8 +193,8 @@ func TestGetAll_Coverage(t *testing.T) {
 		if err == nil {
 			t.Error("Expected error for invalid dst, got nil")
 		}
-		if !errors.Is(err, errors.New("dst must be a pointer to slice")) && err.Error() != "dst must be a pointer to slice" {
-			t.Errorf("Expected 'dst must be a pointer to slice' error, got: %v", err)
+		if !errors.Is(err, datastore.ErrInvalidEntityType) {
+			t.Errorf("Expected ErrInvalidEntityType, got: %v", err)
 		}
 	})
 

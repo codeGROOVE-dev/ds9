@@ -41,7 +41,7 @@ func (it *Iterator) Next(dst any) (*Key, error) {
 			return nil, it.err
 		}
 		if !it.fetchNext {
-			return nil, ErrDone
+			return nil, Done
 		}
 
 		// Fetch next batch
@@ -51,7 +51,7 @@ func (it *Iterator) Next(dst any) (*Key, error) {
 		}
 
 		if len(it.results) == 0 {
-			return nil, ErrDone
+			return nil, Done
 		}
 	}
 
