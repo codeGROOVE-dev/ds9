@@ -384,7 +384,7 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 }
 
 // GetAll retrieves all entities matching the query and stores them in dst.
-// dst must be a pointer to a slice of structs.
+// dst must be a pointer to a slice of structs, or nil for KeysOnly queries.
 // Returns the keys of the retrieved entities and any error.
 // This matches the API of cloud.google.com/go/datastore.
 func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, error) {
@@ -429,6 +429,21 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 	if err := json.Unmarshal(body, &result); err != nil {
 		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
 		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// For KeysOnly queries, dst can be nil - just return keys
+	if query.keysOnly && dst == nil {
+		keys := make([]*Key, 0, len(result.Batch.EntityResults))
+		for _, er := range result.Batch.EntityResults {
+			key, err := keyFromJSON(er.Entity["key"])
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to parse key from response", "error", err)
+				return nil, err
+			}
+			keys = append(keys, key)
+		}
+		c.logger.DebugContext(ctx, "keys-only query completed successfully", "kind", query.kind, "keys_found", len(keys))
+		return keys, nil
 	}
 
 	// Verify dst is a pointer to slice
