@@ -50,7 +50,7 @@ Just switch the import path from `cloud.google.com/go/datastore` to `github.com/
 
 These features are unsupported just because we haven't found a use for the feature yet. PRs welcome:
 
-* Embedded structs, nested slices, map types, some advanced query features (streaming aggregations, OR filters).
+* Nested slices, map types, some advanced query features (streaming aggregations, OR filters).
 
 ## Testing
 

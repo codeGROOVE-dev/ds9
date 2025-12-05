@@ -34,9 +34,9 @@ func TestEncodeValue_ReflectionSlices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := encodeValue(tt.value)
+			result, err := encodeAny(tt.value)
 			if err != nil {
-				t.Errorf("encodeValue(%v) failed: %v", tt.value, err)
+				t.Errorf("encodeAny(%v) failed: %v", tt.value, err)
 			}
 			if result == nil {
 				t.Error("Expected non-nil result")
@@ -63,17 +63,14 @@ func TestEncodeValue_Errors(t *testing.T) {
 			"channel type",
 			make(chan int),
 		},
-		{
-			"struct type",
-			struct{ Name string }{Name: "test"},
-		},
+		// Note: struct types are now supported as nested entities
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := encodeValue(tt.value)
+			_, err := encodeAny(tt.value)
 			if err == nil {
-				t.Errorf("encodeValue(%T) should have returned an error", tt.value)
+				t.Errorf("encodeAny(%T) should have returned an error", tt.value)
 			}
 		})
 	}
@@ -86,7 +83,7 @@ func TestEncodeValue_TimeSlice(t *testing.T) {
 
 	timeSlice := []time.Time{now, later}
 
-	result, err := encodeValue(timeSlice)
+	result, err := encodeAny(timeSlice)
 	if err != nil {
 		t.Fatalf("encodeValue failed for time slice: %v", err)
 	}
@@ -122,7 +119,7 @@ func TestEncodeValue_EmptySlices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := encodeValue(tt.value)
+			result, err := encodeAny(tt.value)
 			if err != nil {
 				t.Errorf("encodeValue failed: %v", err)
 			}
@@ -148,7 +145,7 @@ func TestEncodeValue_SingleElementSlices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := encodeValue(tt.value)
+			result, err := encodeAny(tt.value)
 			if err != nil {
 				t.Errorf("encodeValue failed: %v", err)
 			}

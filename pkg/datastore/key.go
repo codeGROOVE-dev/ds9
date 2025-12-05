@@ -11,42 +11,55 @@ import (
 
 // Key represents a Datastore key.
 type Key struct {
-	Parent *Key // Parent key for hierarchical keys
-	Kind   string
-	Name   string // For string keys
-	ID     int64  // For numeric keys
+	Namespace string
+	Parent    *Key // Parent key for hierarchical keys
+	Kind      string
+	Name      string // For string keys
+	ID        int64  // For numeric keys
 }
 
 // NameKey creates a new key with a string name.
 // The parent parameter can be nil for top-level keys.
 // This matches the API of cloud.google.com/go/datastore.
 func NameKey(kind, name string, parent *Key) *Key {
-	return &Key{
+	k := &Key{
 		Kind:   kind,
 		Name:   name,
 		Parent: parent,
 	}
+	if parent != nil {
+		k.Namespace = parent.Namespace
+	}
+	return k
 }
 
 // IDKey creates a new key with a numeric ID.
 // The parent parameter can be nil for top-level keys.
 // This matches the API of cloud.google.com/go/datastore.
 func IDKey(kind string, id int64, parent *Key) *Key {
-	return &Key{
+	k := &Key{
 		Kind:   kind,
 		ID:     id,
 		Parent: parent,
 	}
+	if parent != nil {
+		k.Namespace = parent.Namespace
+	}
+	return k
 }
 
 // IncompleteKey creates a new incomplete key.
 // The key will be completed (assigned an ID) when the entity is saved.
 // API compatible with cloud.google.com/go/datastore.
 func IncompleteKey(kind string, parent *Key) *Key {
-	return &Key{
+	k := &Key{
 		Kind:   kind,
 		Parent: parent,
 	}
+	if parent != nil {
+		k.Namespace = parent.Namespace
+	}
+	return k
 }
 
 // Incomplete returns true if the key does not have an ID or Name.
@@ -64,7 +77,7 @@ func (k *Key) Equal(other *Key) bool {
 	if k == nil || other == nil {
 		return false
 	}
-	if k.Kind != other.Kind || k.Name != other.Name || k.ID != other.ID {
+	if k.Namespace != other.Namespace || k.Kind != other.Kind || k.Name != other.Name || k.ID != other.ID {
 		return false
 	}
 	// Recursively check parent keys
@@ -93,7 +106,11 @@ func (k *Key) String() string {
 		parts = append([]string{part}, parts...)
 	}
 
-	return "/" + strings.Join(parts, "/")
+	keyStr := "/" + strings.Join(parts, "/")
+	if k.Namespace != "" {
+		keyStr = fmt.Sprintf("[%s]%s", k.Namespace, keyStr)
+	}
+	return keyStr
 }
 
 // Encode returns an opaque representation of the key.
@@ -172,9 +189,18 @@ func keyToJSON(key *Key) map[string]any {
 		path = append(path, elem)
 	}
 
-	return map[string]any{
+	m := map[string]any{
 		"path": path,
 	}
+
+	// Add partitionId if namespace is present
+	if key.Namespace != "" {
+		m["partitionId"] = map[string]any{
+			"namespaceId": key.Namespace,
+		}
+	}
+
+	return m
 }
 
 // keyFromJSON converts a JSON key representation to a Key.
@@ -189,6 +215,13 @@ func keyFromJSON(keyData any) (*Key, error) {
 		return nil, errors.New("invalid key path")
 	}
 
+	var namespace string
+	if pid, ok := keyMap["partitionId"].(map[string]any); ok {
+		if ns, ok := pid["namespaceId"].(string); ok {
+			namespace = ns
+		}
+	}
+
 	// Build key hierarchy from path elements
 	var key *Key
 	for _, elem := range path {
@@ -198,7 +231,8 @@ func keyFromJSON(keyData any) (*Key, error) {
 		}
 
 		newKey := &Key{
-			Parent: key,
+			Parent:    key,
+			Namespace: namespace,
 		}
 
 		if kind, ok := elemMap["kind"].(string); ok {

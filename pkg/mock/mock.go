@@ -200,29 +200,8 @@ func (s *Store) handleLookup(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	for _, keyData := range req.Keys {
-		path, ok := keyData["path"].([]any)
+		keyStr, ok := s.extractKeyString(keyData)
 		if !ok {
-			continue
-		}
-		if len(path) == 0 {
-			continue
-		}
-		pathElem, ok := path[0].(map[string]any)
-		if !ok {
-			continue
-		}
-		kind, ok := pathElem["kind"].(string)
-		if !ok {
-			continue
-		}
-
-		// Handle both name and ID keys
-		var keyStr string
-		if name, ok := pathElem["name"].(string); ok {
-			keyStr = kind + "/" + name
-		} else if id, ok := pathElem["id"].(string); ok {
-			keyStr = kind + "/" + id
-		} else {
 			continue
 		}
 
@@ -517,12 +496,20 @@ func (s *Store) resolveKey(keyData map[string]any) (keyStr string, updatedKey ma
 		return "", nil, false
 	}
 
+	// Extract namespace
+	namespace := ""
+	if pid, ok := keyData["partitionId"].(map[string]any); ok {
+		if ns, ok := pid["namespaceId"].(string); ok {
+			namespace = ns
+		}
+	}
+
 	// Handle both name and ID keys
 	if name, ok := pathElem["name"].(string); ok {
-		return kind + "/" + name, keyData, true
+		return namespace + "!" + kind + "/" + name, keyData, true
 	}
 	if id, ok := pathElem["id"].(string); ok {
-		return kind + "/" + id, keyData, true
+		return namespace + "!" + kind + "/" + id, keyData, true
 	}
 
 	// Incomplete key - allocate an ID
@@ -530,7 +517,7 @@ func (s *Store) resolveKey(keyData map[string]any) (keyStr string, updatedKey ma
 	allocatedID := strconv.FormatInt(s.nextID, 10)
 	pathElem["id"] = allocatedID
 
-	return kind + "/" + allocatedID, keyData, true
+	return namespace + "!" + kind + "/" + allocatedID, keyData, true
 }
 
 // extractKeyString extracts the key string from key data.
@@ -548,12 +535,20 @@ func (*Store) extractKeyString(keyData map[string]any) (string, bool) {
 		return "", false
 	}
 
+	// Extract namespace
+	namespace := ""
+	if pid, ok := keyData["partitionId"].(map[string]any); ok {
+		if ns, ok := pid["namespaceId"].(string); ok {
+			namespace = ns
+		}
+	}
+
 	// Handle both name and ID keys
 	if name, ok := pathElem["name"].(string); ok {
-		return kind + "/" + name, true
+		return namespace + "!" + kind + "/" + name, true
 	}
 	if id, ok := pathElem["id"].(string); ok {
-		return kind + "/" + id, true
+		return namespace + "!" + kind + "/" + id, true
 	}
 	return "", false
 }
@@ -566,11 +561,30 @@ type queryResult struct {
 	entity map[string]any
 }
 
+// isKeysOnlyQuery checks if the query has a projection for only __key__.
+func isKeysOnlyQuery(query map[string]any) bool {
+	projection, ok := query["projection"].([]any)
+	if !ok || len(projection) != 1 {
+		return false
+	}
+	proj, ok := projection[0].(map[string]any)
+	if !ok {
+		return false
+	}
+	prop, ok := proj["property"].(map[string]any)
+	if !ok {
+		return false
+	}
+	name, ok := prop["name"].(string)
+	return ok && name == "__key__"
+}
+
 // handleRunQuery handles query requests.
 func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Query      map[string]any `json:"query"`
-		DatabaseID string         `json:"databaseId"`
+		Query       map[string]any `json:"query"`
+		PartitionID map[string]any `json:"partitionId"`
+		DatabaseID  string         `json:"databaseId"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -602,6 +616,14 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
 		return
+	}
+
+	// Filter by namespace
+	namespace := ""
+	if req.PartitionID != nil {
+		if ns, ok := req.PartitionID["namespaceId"].(string); ok {
+			namespace = ns
+		}
 	}
 
 	var limit int
@@ -644,7 +666,15 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if entityKind == kind {
+		// Check kind and namespace
+		entityNamespace := ""
+		if pid, ok := keyData["partitionId"].(map[string]any); ok {
+			if ns, ok := pid["namespaceId"].(string); ok {
+				entityNamespace = ns
+			}
+		}
+
+		if entityKind == kind && entityNamespace == namespace {
 			// Apply filters if present
 			if filterMap, hasFilter := query["filter"].(map[string]any); hasFilter {
 				if !matchesFilter(entity, filterMap) {
@@ -679,12 +709,24 @@ func (s *Store) handleRunQuery(w http.ResponseWriter, r *http.Request) {
 		matches = matches[:limit]
 	}
 
+	// Check if this is a keys-only query (projection contains only __key__)
+	keysOnly := isKeysOnlyQuery(query)
+
 	// Build results
 	results := make([]any, 0, len(matches))
 	for _, m := range matches {
-		results = append(results, map[string]any{
-			"entity": m.entity,
-		})
+		if keysOnly {
+			// For keys-only queries, return entity with only the key (no properties)
+			results = append(results, map[string]any{
+				"entity": map[string]any{
+					"key": m.entity["key"],
+				},
+			})
+		} else {
+			results = append(results, map[string]any{
+				"entity": m.entity,
+			})
+		}
 	}
 
 	// Generate cursor for pagination
@@ -993,6 +1035,29 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 		}
 		filterValue := propFilter["value"]
 
+		// Handle HAS_ANCESTOR
+		if operator == "HAS_ANCESTOR" {
+			ancestorKeyData, ok := filterValue.(map[string]any)
+			if !ok {
+				// Try keyValue if wrapped
+				kv, ok := filterValue.(map[string]any)
+				if !ok {
+					return false
+				}
+				ak, ok := kv["keyValue"].(map[string]any)
+				if !ok {
+					return false
+				}
+				ancestorKeyData = ak
+			}
+			// Check if entity key has prefix of ancestor key path
+			entityKeyData, ok := entity["key"].(map[string]any)
+			if !ok {
+				return false
+			}
+			return isAncestor(ancestorKeyData, entityKeyData)
+		}
+
 		// Get entity properties
 		properties, ok := entity["properties"].(map[string]any)
 		if !ok {
@@ -1100,6 +1165,42 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 	}
 
 	return true // No filter or unrecognized filter, allow all
+}
+
+// isAncestor checks if ancestorKey is a prefix of entityKey.
+func isAncestor(ancestorKey, entityKey map[string]any) bool {
+	ancPath, ok1 := ancestorKey["path"].([]any)
+	entPath, ok2 := entityKey["path"].([]any)
+
+	if !ok1 || !ok2 {
+		return false
+	}
+
+	if len(ancPath) > len(entPath) {
+		return false
+	}
+
+	// Check equality of path elements
+	for i := range ancPath {
+		ap, ok1 := ancPath[i].(map[string]any)
+		ep, ok2 := entPath[i].(map[string]any)
+
+		if !ok1 || !ok2 {
+			return false
+		}
+
+		if ap["kind"] != ep["kind"] {
+			return false
+		}
+		if ap["name"] != ep["name"] {
+			return false
+		}
+		if ap["id"] != ep["id"] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // handleRunAggregationQuery handles :runAggregationQuery requests.

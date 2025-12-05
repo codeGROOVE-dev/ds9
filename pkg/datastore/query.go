@@ -194,18 +194,11 @@ func buildQueryMap(query *Query) map[string]any {
 		"kind": []map[string]any{{"name": query.kind}},
 	}
 
-	// Add namespace via partition ID if specified
-	if query.namespace != "" {
-		queryMap["partitionId"] = map[string]any{
-			"namespaceId": query.namespace,
-		}
-	}
-
 	// Add filters
 	if len(query.filters) > 0 {
 		var compositeFilters []map[string]any
 		for _, f := range query.filters {
-			encodedVal, err := encodeValue(f.value)
+			encodedVal, err := encodeAny(f.value)
 			if err != nil {
 				// Skip invalid filters
 				continue
@@ -341,6 +334,9 @@ func (c *Client) AllKeys(ctx context.Context, q *Query) ([]*Key, error) {
 	if c.databaseID != "" {
 		reqBody["databaseId"] = c.databaseID
 	}
+	if q.namespace != "" {
+		reqBody["partitionId"] = map[string]any{"namespaceId": q.namespace}
+	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -403,6 +399,9 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 	if c.databaseID != "" {
 		reqBody["databaseId"] = c.databaseID
 	}
+	if query.namespace != "" {
+		reqBody["partitionId"] = map[string]any{"namespaceId": query.namespace}
+	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
@@ -431,8 +430,9 @@ func (c *Client) GetAll(ctx context.Context, query *Query, dst any) ([]*Key, err
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	// For KeysOnly queries, dst can be nil - just return keys
-	if query.keysOnly && dst == nil {
+	// For KeysOnly queries, skip entity decoding - just return keys
+	// The Datastore API returns entities without properties for keys-only queries
+	if query.keysOnly {
 		keys := make([]*Key, 0, len(result.Batch.EntityResults))
 		for _, er := range result.Batch.EntityResults {
 			key, err := keyFromJSON(er.Entity["key"])
@@ -512,6 +512,9 @@ func (c *Client) Count(ctx context.Context, q *Query) (int, error) {
 	}
 	if c.databaseID != "" {
 		reqBody["databaseId"] = c.databaseID
+	}
+	if q.namespace != "" {
+		reqBody["partitionId"] = map[string]any{"namespaceId": q.namespace}
 	}
 
 	jsonData, err := json.Marshal(reqBody)

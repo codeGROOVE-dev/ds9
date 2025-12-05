@@ -63,9 +63,12 @@ func (it *Iterator) Next(dst any) (*Key, error) {
 		it.cursor = result.cursor
 	}
 
-	// Decode entity into dst
-	if err := decodeEntity(result.entity, dst); err != nil {
-		return nil, err
+	// For KeysOnly queries, skip entity decoding - just return the key
+	// The Datastore API returns entities without properties for keys-only queries
+	if !it.query.keysOnly {
+		if err := decodeEntity(result.entity, dst); err != nil {
+			return nil, err
+		}
 	}
 
 	return result.key, nil
