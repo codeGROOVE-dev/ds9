@@ -37,20 +37,12 @@ Just switch the import path from `cloud.google.com/go/datastore` to `github.com/
 ## Features
 
 **Supported Features**
-- **CRUD**: Get, Put, Delete, GetMulti, PutMulti, DeleteMulti
-- **Transactions**: RunInTransaction, NewTransaction, Commit, Rollback
-- **Queries**: Filter, Order, Limit, Offset, Ancestor, Project, Distinct, DistinctOn, Namespace, Run (iterator), Count
-- **Cursors**: Start, End, DecodeCursor
-- **Keys**: NameKey, IDKey, IncompleteKey, AllocateIDs, parent keys
-- **Mutations**: NewInsert, NewUpdate, NewUpsert, NewDelete, Mutate
-- **Errors**: ErrNoSuchEntity, ErrInvalidKey, ErrInvalidEntityType, ErrConcurrentTransaction, Done, MultiError
-- **Types**: string, int, int64, int32, bool, float64, time.Time, slices ([]string, []int64, []int, []float64, []bool)
+
+* Basically everything that the upstream datastore library has
 
 **Unsupported Features**
 
-These features are unsupported just because we haven't found a use for the feature yet. PRs welcome:
-
-* Nested slices, map types, some advanced query features (streaming aggregations, OR filters).
+* Nested slices, map types, esoteric advanced query features like streaming aggregations
 
 ## Testing
 
