@@ -7,7 +7,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/codeGROOVE-dev/ds9)](go.mod)
 
-Zero-dependency Google Cloud Datastore client for Go. Drop-in replacement for `cloud.google.com/go/datastore` with CRUD, transactions, queries, cursors, and mutations. In-memory mock implementation. Comprehensive testing.
+Zero-dependency Google Cloud Datastore client for Go. Drop-in replacement for `cloud.google.com/go/datastore` with an in-memory mock implementation. 
 
 **Why?** The official client has 50+ dependencies. `ds9` has zero—ideal for lightweight services and minimizing supply chain risk.
 
