@@ -138,16 +138,16 @@ func TestMultiErrorGetMulti_NilKeys(t *testing.T) {
 		t.Fatalf("Expected MultiError, got %T", err)
 	}
 
-	if multiErr[0] != nil {
-		t.Errorf("Expected no error for key[0], got: %v", multiErr[0])
+	if !errors.Is(multiErr[0], datastore.ErrNoSuchEntity) {
+		t.Errorf("Expected ErrNoSuchEntity for key[0], got: %v", multiErr[0])
 	}
 	if multiErr[1] == nil {
 		t.Error("Expected error for nil key at index 1")
 	} else if !errors.Is(multiErr[1], datastore.ErrInvalidKey) {
 		t.Errorf("Expected ErrInvalidKey for nil key, got: %v", multiErr[1])
 	}
-	if multiErr[2] != nil {
-		t.Errorf("Expected no error for key[2], got: %v", multiErr[2])
+	if !errors.Is(multiErr[2], datastore.ErrNoSuchEntity) {
+		t.Errorf("Expected ErrNoSuchEntity for key[2], got: %v", multiErr[2])
 	}
 }
 

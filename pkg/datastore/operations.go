@@ -11,6 +11,12 @@ import (
 	"github.com/codeGROOVE-dev/ds9/auth"
 )
 
+const (
+	maxLookupBatch     = 1000
+	maxMutationBatch   = 500
+	maxAllocationBatch = 500
+)
+
 // Get retrieves an entity by key and stores it in dst.
 // dst must be a pointer to a struct.
 // Returns ErrNoSuchEntity if the key is not found.
@@ -186,10 +192,9 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 			c.logger.WarnContext(ctx, "GetMulti called with nil key", "index", i)
 			multiErr[i] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, i)
 			hasErr = true
+		} else {
+			multiErr[i] = ErrNoSuchEntity // Default to not found
 		}
-	}
-	if hasErr {
-		return multiErr
 	}
 
 	// Decode into slice
@@ -199,6 +204,7 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 	}
 
 	sliceType := dstValue.Elem().Type()
+	resultSlice := reflect.MakeSlice(sliceType, len(keys), len(keys))
 
 	token, err := auth.AccessToken(ctx)
 	if err != nil {
@@ -206,10 +212,79 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	// Build keys array
-	jsonKeys := make([]map[string]any, len(keys))
-	for i, key := range keys {
-		jsonKeys[i] = keyToJSON(key)
+	// Process in batches
+	for i := 0; i < len(keys); i += maxLookupBatch {
+		end := i + maxLookupBatch
+		if end > len(keys) {
+			end = len(keys)
+		}
+
+		batchKeys := keys[i:end]
+		batchIndices := make([]int, len(batchKeys))
+		for k := range batchKeys {
+			batchIndices[k] = i + k
+		}
+
+		// Skip batch if all keys are nil
+		allNil := true
+		for _, k := range batchKeys {
+			if k != nil {
+				allNil = false
+				break
+			}
+		}
+		if allNil {
+			continue
+		}
+
+		if err := c.getMultiBatch(ctx, batchKeys, batchIndices, i, token, resultSlice, multiErr); err != nil {
+			// Batch failure handled inside getMultiBatch by updating multiErr
+			// We just check if we need to set hasErr
+			hasErr = true
+		}
+	}
+
+	// Check if any errors occurred (including NoSuchEntity)
+	for _, e := range multiErr {
+		if e != nil {
+			hasErr = true
+			break
+		}
+	}
+
+	// Set the result slice
+	dstValue.Elem().Set(resultSlice)
+
+	if hasErr {
+		return multiErr
+	}
+
+	c.logger.DebugContext(ctx, "entities retrieved successfully", "count", len(keys))
+	return nil
+}
+
+// getMultiBatch processes a single batch of keys for GetMulti.
+func (c *Client) getMultiBatch(
+	ctx context.Context,
+	batchKeys []*Key,
+	batchIndices []int,
+	batchOffset int,
+	token string,
+	resultSlice reflect.Value,
+	multiErr MultiError,
+) error {
+	// Build keys array for this batch
+	jsonKeys := make([]map[string]any, 0, len(batchKeys))
+	keyMap := make(map[string][]int) // Map key string to original index
+
+	for k, key := range batchKeys {
+		if key == nil {
+			continue
+		}
+		jsonKeys = append(jsonKeys, keyToJSON(key))
+		keyStr := key.String()
+		idx := batchOffset + k
+		keyMap[keyStr] = append(keyMap[keyStr], idx)
 	}
 
 	reqBody := map[string]any{
@@ -225,11 +300,17 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// URL-encode project ID to prevent injection attacks
 	reqURL := fmt.Sprintf("%s/projects/%s:lookup", c.baseURL, neturl.PathEscape(c.projectID))
 	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
 	if err != nil {
-		c.logger.ErrorContext(ctx, "lookup request failed", "error", err)
+		c.logger.ErrorContext(ctx, "lookup request failed for batch", "batch_start", batchOffset, "error", err)
+		// Mark all keys in this batch as failed
+		for _, idx := range batchIndices {
+			// Don't overwrite existing errors (like nil key)
+			if errors.Is(multiErr[idx], ErrNoSuchEntity) {
+				multiErr[idx] = err
+			}
+		}
 		return err
 	}
 
@@ -244,22 +325,13 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 
 	if err := json.Unmarshal(body, &result); err != nil {
 		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
-		return fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	// Create a map of keys to their indices
-	keyMap := make(map[string][]int)
-	for i, key := range keys {
-		keyStr := key.String()
-		keyMap[keyStr] = append(keyMap[keyStr], i)
-	}
-
-	// Create slice to hold results, sized to match keys
-	resultSlice := reflect.MakeSlice(sliceType, len(keys), len(keys))
-
-	// Mark all as not found initially
-	for i := range keys {
-		multiErr[i] = ErrNoSuchEntity
+		// Mark batch as failed
+		for _, idx := range batchIndices {
+			if errors.Is(multiErr[idx], ErrNoSuchEntity) {
+				multiErr[idx] = fmt.Errorf("failed to parse response: %w", err)
+			}
+		}
+		return err
 	}
 
 	// Process found entities
@@ -267,7 +339,7 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 		key, err := keyFromJSON(found.Entity["key"])
 		if err != nil {
 			c.logger.ErrorContext(ctx, "failed to parse key from response", "error", err)
-			return err
+			continue
 		}
 
 		keyStr := key.String()
@@ -281,44 +353,13 @@ func (c *Client) GetMulti(ctx context.Context, keys []*Key, dst any) error {
 			if err := decodeEntity(found.Entity, elem.Addr().Interface()); err != nil {
 				c.logger.ErrorContext(ctx, "failed to decode entity", "index", index, "error", err)
 				multiErr[index] = err
-				hasErr = true
 			} else {
 				multiErr[index] = nil // Success
 			}
 		}
 	}
+	// Missing entities remain as ErrNoSuchEntity
 
-	// Process missing entities - they already have ErrNoSuchEntity set
-	for _, missing := range result.Missing {
-		key, err := keyFromJSON(missing.Entity["key"])
-		if err != nil {
-			continue
-		}
-		keyStr := key.String()
-		if indices, ok := keyMap[keyStr]; ok {
-			for range indices {
-				hasErr = true
-				// multiErr[index] already set to ErrNoSuchEntity above
-			}
-		}
-	}
-
-	// Check if any entities are still marked as missing
-	for i, e := range multiErr {
-		if errors.Is(e, ErrNoSuchEntity) {
-			hasErr = true
-			c.logger.DebugContext(ctx, "entity not found", "index", i, "key", keys[i].String())
-		}
-	}
-
-	// Set the result slice
-	dstValue.Elem().Set(resultSlice)
-
-	if hasErr {
-		return multiErr
-	}
-
-	c.logger.DebugContext(ctx, "entities retrieved successfully", "count", len(keys))
 	return nil
 }
 
@@ -347,36 +388,8 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 		return nil, fmt.Errorf("keys and src length mismatch: %d != %d", len(keys), v.Len())
 	}
 
-	// Validate keys and encode entities upfront
 	multiErr := make(MultiError, len(keys))
 	hasErr := false
-	mutations := make([]map[string]any, len(keys))
-
-	for i, key := range keys {
-		if key == nil {
-			c.logger.WarnContext(ctx, "PutMulti called with nil key", "index", i)
-			multiErr[i] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, i)
-			hasErr = true
-			continue
-		}
-
-		entity, err := encodeEntity(key, v.Index(i).Interface())
-		if err != nil {
-			c.logger.ErrorContext(ctx, "failed to encode entity", "error", err, "index", i)
-			multiErr[i] = err
-			hasErr = true
-			continue
-		}
-
-		mutations[i] = map[string]any{
-			"upsert": entity,
-		}
-	}
-
-	// If encoding failed, return MultiError
-	if hasErr {
-		return nil, multiErr
-	}
 
 	token, err := auth.AccessToken(ctx)
 	if err != nil {
@@ -384,25 +397,74 @@ func (c *Client) PutMulti(ctx context.Context, keys []*Key, src any) ([]*Key, er
 		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	reqBody := map[string]any{
-		"mode":      "NON_TRANSACTIONAL",
-		"mutations": mutations,
-	}
-	if c.databaseID != "" {
-		reqBody["databaseId"] = c.databaseID
+	// Process in batches
+	for i := 0; i < len(keys); i += maxMutationBatch {
+		end := i + maxMutationBatch
+		if end > len(keys) {
+			end = len(keys)
+		}
+
+		batchLen := end - i
+		mutations := make([]map[string]any, 0, batchLen)
+		batchIndices := make([]int, 0, batchLen)
+
+		// Prepare batch mutations
+		for k := range batchLen {
+			idx := i + k
+			key := keys[idx]
+
+			if key == nil {
+				c.logger.WarnContext(ctx, "PutMulti called with nil key", "index", idx)
+				multiErr[idx] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, idx)
+				hasErr = true
+				continue
+			}
+
+			entity, err := encodeEntity(key, v.Index(idx).Interface())
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to encode entity", "error", err, "index", idx)
+				multiErr[idx] = err
+				hasErr = true
+				continue
+			}
+
+			mutations = append(mutations, map[string]any{
+				"upsert": entity,
+			})
+			batchIndices = append(batchIndices, idx)
+		}
+
+		if len(mutations) == 0 {
+			continue
+		}
+
+		reqBody := map[string]any{
+			"mode":      "NON_TRANSACTIONAL",
+			"mutations": mutations,
+		}
+		if c.databaseID != "" {
+			reqBody["databaseId"] = c.databaseID
+		}
+
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+
+		reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
+		if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
+			c.logger.ErrorContext(ctx, "commit request failed", "error", err)
+			// Mark valid keys in this batch as failed
+			for _, idx := range batchIndices {
+				multiErr[idx] = err
+				hasErr = true
+			}
+		}
 	}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
-	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
-		c.logger.ErrorContext(ctx, "commit request failed", "error", err)
-		return nil, err
+	if hasErr {
+		return keys, multiErr
 	}
 
 	c.logger.DebugContext(ctx, "entities stored successfully", "count", len(keys))
@@ -420,28 +482,8 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 
 	c.logger.DebugContext(ctx, "deleting multiple entities", "count", len(keys))
 
-	// Validate keys upfront
 	multiErr := make(MultiError, len(keys))
 	hasErr := false
-	mutations := make([]map[string]any, len(keys))
-
-	for i, key := range keys {
-		if key == nil {
-			c.logger.WarnContext(ctx, "DeleteMulti called with nil key", "index", i)
-			multiErr[i] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, i)
-			hasErr = true
-			continue
-		}
-
-		mutations[i] = map[string]any{
-			"delete": keyToJSON(key),
-		}
-	}
-
-	// If validation failed, return MultiError
-	if hasErr {
-		return multiErr
-	}
 
 	token, err := auth.AccessToken(ctx)
 	if err != nil {
@@ -449,25 +491,65 @@ func (c *Client) DeleteMulti(ctx context.Context, keys []*Key) error {
 		return fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	reqBody := map[string]any{
-		"mode":      "NON_TRANSACTIONAL",
-		"mutations": mutations,
-	}
-	if c.databaseID != "" {
-		reqBody["databaseId"] = c.databaseID
+	// Process in batches
+	for i := 0; i < len(keys); i += maxMutationBatch {
+		end := i + maxMutationBatch
+		if end > len(keys) {
+			end = len(keys)
+		}
+
+		batchLen := end - i
+		mutations := make([]map[string]any, 0, batchLen)
+		batchIndices := make([]int, 0, batchLen)
+
+		for k := range batchLen {
+			idx := i + k
+			key := keys[idx]
+
+			if key == nil {
+				c.logger.WarnContext(ctx, "DeleteMulti called with nil key", "index", idx)
+				multiErr[idx] = fmt.Errorf("%w: key at index %d cannot be nil", ErrInvalidKey, idx)
+				hasErr = true
+				continue
+			}
+
+			mutations = append(mutations, map[string]any{
+				"delete": keyToJSON(key),
+			})
+			batchIndices = append(batchIndices, idx)
+		}
+
+		if len(mutations) == 0 {
+			continue
+		}
+
+		reqBody := map[string]any{
+			"mode":      "NON_TRANSACTIONAL",
+			"mutations": mutations,
+		}
+		if c.databaseID != "" {
+			reqBody["databaseId"] = c.databaseID
+		}
+
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+			return fmt.Errorf("failed to marshal request: %w", err)
+		}
+
+		reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
+		if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
+			c.logger.ErrorContext(ctx, "delete request failed", "error", err)
+			// Mark valid keys in this batch as failed
+			for _, idx := range batchIndices {
+				multiErr[idx] = err
+				hasErr = true
+			}
+		}
 	}
 
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:commit", c.baseURL, neturl.PathEscape(c.projectID))
-	if _, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID); err != nil {
-		c.logger.ErrorContext(ctx, "delete request failed", "error", err)
-		return err
+	if hasErr {
+		return multiErr
 	}
 
 	c.logger.DebugContext(ctx, "entities deleted successfully", "count", len(keys))
@@ -536,50 +618,57 @@ func (c *Client) AllocateIDs(ctx context.Context, keys []*Key) ([]*Key, error) {
 		return nil, fmt.Errorf("failed to get access token: %w", err)
 	}
 
-	// Build request with incomplete keys
-	reqKeys := make([]map[string]any, len(incompleteKeys))
-	for i, key := range incompleteKeys {
-		reqKeys[i] = keyToJSON(key)
-	}
+	// Process in batches
+	allocatedKeys := make([]*Key, len(incompleteKeys))
 
-	reqBody := map[string]any{
-		"keys": reqKeys,
-	}
-	if c.databaseID != "" {
-		reqBody["databaseId"] = c.databaseID
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// URL-encode project ID to prevent injection attacks
-	reqURL := fmt.Sprintf("%s/projects/%s:allocateIds", c.baseURL, neturl.PathEscape(c.projectID))
-	body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "allocateIds request failed", "error", err)
-		return nil, err
-	}
-
-	var resp struct {
-		Keys []map[string]any `json:"keys"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
-		return nil, fmt.Errorf("failed to parse allocateIds response: %w", err)
-	}
-
-	// Parse allocated keys
-	allocatedKeys := make([]*Key, len(resp.Keys))
-	for i, keyData := range resp.Keys {
-		key, err := keyFromJSON(keyData)
-		if err != nil {
-			c.logger.ErrorContext(ctx, "failed to parse allocated key", "index", i, "error", err)
-			return nil, fmt.Errorf("failed to parse allocated key at index %d: %w", i, err)
+	for i := 0; i < len(incompleteKeys); i += maxAllocationBatch {
+		end := i + maxAllocationBatch
+		if end > len(incompleteKeys) {
+			end = len(incompleteKeys)
 		}
-		allocatedKeys[i] = key
+
+		batchKeys := incompleteKeys[i:end]
+		reqKeys := make([]map[string]any, len(batchKeys))
+		for k, key := range batchKeys {
+			reqKeys[k] = keyToJSON(key)
+		}
+
+		reqBody := map[string]any{
+			"keys": reqKeys,
+		}
+		if c.databaseID != "" {
+			reqBody["databaseId"] = c.databaseID
+		}
+
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			c.logger.ErrorContext(ctx, "failed to marshal request", "error", err)
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+
+		reqURL := fmt.Sprintf("%s/projects/%s:allocateIds", c.baseURL, neturl.PathEscape(c.projectID))
+		body, err := doRequest(ctx, c.logger, reqURL, jsonData, token, c.projectID, c.databaseID)
+		if err != nil {
+			c.logger.ErrorContext(ctx, "allocateIds request failed", "error", err)
+			return nil, err
+		}
+
+		var resp struct {
+			Keys []map[string]any `json:"keys"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			c.logger.ErrorContext(ctx, "failed to parse response", "error", err)
+			return nil, fmt.Errorf("failed to parse allocateIds response: %w", err)
+		}
+
+		for k, keyData := range resp.Keys {
+			key, err := keyFromJSON(keyData)
+			if err != nil {
+				c.logger.ErrorContext(ctx, "failed to parse allocated key", "index", i+k, "error", err)
+				return nil, fmt.Errorf("failed to parse allocated key at index %d: %w", i+k, err)
+			}
+			allocatedKeys[i+k] = key
+		}
 	}
 
 	// Create result slice with allocated keys in correct positions

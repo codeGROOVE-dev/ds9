@@ -33,7 +33,7 @@ func TestEncodeValue_AllTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := encodeValue(tt.value)
+			_, err := encodeAny(tt.value)
 			if err != nil {
 				t.Errorf("encodeValue failed: %v", err)
 			}
@@ -42,7 +42,7 @@ func TestEncodeValue_AllTypes(t *testing.T) {
 }
 
 func TestEncodeValue_UnsupportedType(t *testing.T) {
-	_, err := encodeValue(map[string]string{"key": "value"})
+	_, err := encodeAny(map[string]string{"key": "value"})
 	if err == nil {
 		t.Error("Expected error for unsupported type, got nil")
 	}

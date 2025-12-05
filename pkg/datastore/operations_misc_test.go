@@ -1377,11 +1377,12 @@ func TestArraySliceSupport(t *testing.T) {
 			t.Fatalf("Get failed: %v", err)
 		}
 
-		if result.Strings == nil || len(result.Strings) != 0 {
-			t.Errorf("Expected empty string slice, got %v", result.Strings)
+		// With omitempty tag, empty slices are not stored, so we get nil back
+		if result.Strings != nil {
+			t.Errorf("Expected nil string slice (omitempty), got %v", result.Strings)
 		}
-		if result.Ints == nil || len(result.Ints) != 0 {
-			t.Errorf("Expected empty int slice, got %v", result.Ints)
+		if result.Ints != nil {
+			t.Errorf("Expected nil int slice (omitempty), got %v", result.Ints)
 		}
 	})
 
