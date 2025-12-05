@@ -145,8 +145,10 @@ func (it *Iterator) fetch() error {
 	it.index = 0
 
 	// Check if there are more results
+	// MORE_RESULTS_AFTER_LIMIT means we hit the query limit - don't auto-fetch more
+	// NOT_FINISHED and MORE_RESULTS_AFTER_CURSOR mean we should continue fetching
 	moreResults := result.Batch.MoreResults
-	it.fetchNext = moreResults == "NOT_FINISHED" || moreResults == "MORE_RESULTS_AFTER_LIMIT" || moreResults == "MORE_RESULTS_AFTER_CURSOR"
+	it.fetchNext = moreResults == "NOT_FINISHED" || moreResults == "MORE_RESULTS_AFTER_CURSOR"
 
 	if result.Batch.EndCursor != "" {
 		it.cursor = Cursor(result.Batch.EndCursor)
