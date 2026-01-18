@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/ds9/auth"
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -459,9 +460,16 @@ func TestGetWithDecodeError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -469,7 +477,7 @@ func TestGetWithDecodeError(t *testing.T) {
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with missing properties")
 	}
@@ -555,9 +563,16 @@ func TestDecodeValueInvalidInteger(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -565,7 +580,7 @@ func TestDecodeValueInvalidInteger(t *testing.T) {
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with invalid integer format")
 	} else {
@@ -631,9 +646,16 @@ func TestDecodeValueWrongTypeForInteger(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -641,7 +663,7 @@ func TestDecodeValueWrongTypeForInteger(t *testing.T) {
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with wrong type for integer")
 	} else {
@@ -707,9 +729,16 @@ func TestDecodeValueInvalidTimestamp(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -717,7 +746,7 @@ func TestDecodeValueInvalidTimestamp(t *testing.T) {
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with invalid timestamp format")
 	} else {
@@ -786,9 +815,16 @@ func TestGetMultiDecodeError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -799,7 +835,7 @@ func TestGetMultiDecodeError(t *testing.T) {
 	}
 
 	var entities []testEntity
-	err = client.GetMulti(ctx, keys, &entities)
+	err = client.GetMulti(context.Background(), keys, &entities) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error when one entity has decode error")
 	}

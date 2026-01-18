@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/ds9/auth" // Add missing import
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -197,16 +198,24 @@ func TestDeleteWithDatabaseID(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClientWithDatabase(ctx, "test-project", "del-db")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"test-project",
+		"del-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase failed: %v", err)
 	}
 
 	// Delete with databaseID
 	key := datastore.NameKey("TestKind", "to-delete", nil)
-	err = client.Delete(ctx, key)
+	err = client.Delete(context.Background(), key)
 	if err != nil {
 		t.Fatalf("Delete with databaseID failed: %v", err)
 	}
@@ -256,9 +265,17 @@ func TestMultiDeleteWithDatabaseID(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClientWithDatabase(ctx, "test-project", "multidel-db")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"test-project",
+		"multidel-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase failed: %v", err)
 	}
@@ -268,7 +285,7 @@ func TestMultiDeleteWithDatabaseID(t *testing.T) {
 		datastore.NameKey("TestKind", "key1", nil),
 		datastore.NameKey("TestKind", "key2", nil),
 	}
-	err = client.DeleteMulti(ctx, keys)
+	err = client.DeleteMulti(context.Background(), keys)
 	if err != nil {
 		t.Fatalf("MultiDelete with databaseID failed: %v", err)
 	}
@@ -360,9 +377,16 @@ func TestDeleteMultiWithErrors(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -372,7 +396,7 @@ func TestDeleteMultiWithErrors(t *testing.T) {
 		datastore.NameKey("TestKind", "key2", nil),
 	}
 
-	err = client.DeleteMulti(ctx, keys)
+	err = client.DeleteMulti(context.Background(), keys)
 	if err == nil {
 		t.Fatal("expected error on server failure")
 	}
@@ -492,14 +516,21 @@ func TestDeleteAllByKindQueryFailure(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	err = client.DeleteAllByKind(ctx, "TestKind")
+	err = client.DeleteAllByKind(context.Background(), "TestKind")
 
 	if err == nil {
 		t.Error("expected error when query fails")
@@ -591,15 +622,22 @@ func TestDeleteWithServerError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
-	err = client.Delete(ctx, key)
+	err = client.Delete(context.Background(), key)
 
 	if err == nil {
 		t.Error("expected error on persistent server failure")
@@ -645,12 +683,21 @@ func TestDeleteWithContextCancellation(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
+	var ctx context.Context // Declare ctx here
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
@@ -697,15 +744,23 @@ func TestDeleteAllRetriesFail(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
 
-	err = client.Delete(ctx, key)
+	err = client.Delete(context.Background(), key)
 	if err == nil {
 		t.Error("expected error after all retries exhausted")
 	}
@@ -770,15 +825,23 @@ func TestDeleteWithJSONMarshalError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
 
-	err = client.Delete(ctx, key)
+	err = client.Delete(context.Background(), key)
 	if err != nil {
 		t.Logf("Delete completed with: %v", err)
 	}
@@ -826,13 +889,21 @@ func TestDeleteAllByKindEmptyBatch(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	err = client.DeleteAllByKind(ctx, "EmptyKind")
+	err = client.DeleteAllByKind(context.Background(), "EmptyKind")
 	if err != nil {
 		t.Logf("DeleteAllByKind with empty batch: %v", err)
 	}
@@ -880,8 +951,16 @@ func TestDeleteMultiMixedResults(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -891,7 +970,7 @@ func TestDeleteMultiMixedResults(t *testing.T) {
 		datastore.NameKey("Test", "key2", nil),
 	}
 
-	err = client.DeleteMulti(ctx, keys)
+	err = client.DeleteMulti(context.Background(), keys)
 	// May or may not error depending on implementation
 	if err != nil {
 		t.Logf("DeleteMulti with mismatched results: %v", err)

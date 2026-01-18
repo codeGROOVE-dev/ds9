@@ -1015,118 +1015,189 @@ func (s *Store) handleAllocateIDs(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// extractFilterKeyData extracts key data from a filter value, handling both wrapped and direct formats.
+func extractFilterKeyData(filterValue any) (map[string]any, bool) {
+	fkd, ok := filterValue.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	// Check if it's wrapped in keyValue
+	if kv, hasKeyValue := fkd["keyValue"].(map[string]any); hasKeyValue {
+		return kv, true
+	}
+	// It's a direct key
+	return fkd, true
+}
+
+// matchesKeyFilter checks if an entity matches a __key__ filter.
+func matchesKeyFilter(entity map[string]any, operator string, filterValue any) bool {
+	entityKeyData, ok := entity["key"].(map[string]any)
+	if !ok {
+		return false
+	}
+
+	filterKeyData, ok := extractFilterKeyData(filterValue)
+	if !ok {
+		return false
+	}
+
+	// Compare keys based on operator
+	cmpResult := compareKeys(entityKeyData, filterKeyData)
+	switch operator {
+	case "EQUAL":
+		return cmpResult == 0
+	case "GREATER_THAN":
+		return cmpResult > 0
+	case "GREATER_THAN_OR_EQUAL":
+		return cmpResult >= 0
+	case "LESS_THAN":
+		return cmpResult < 0
+	case "LESS_THAN_OR_EQUAL":
+		return cmpResult <= 0
+	default:
+		return false
+	}
+}
+
+// matchesAncestorFilter checks if an entity matches a HAS_ANCESTOR filter.
+func matchesAncestorFilter(entity map[string]any, filterValue any) bool {
+	ancestorKeyData, ok := filterValue.(map[string]any)
+	if !ok {
+		// Try keyValue if wrapped
+		kv, ok := filterValue.(map[string]any)
+		if !ok {
+			return false
+		}
+		ak, ok := kv["keyValue"].(map[string]any)
+		if !ok {
+			return false
+		}
+		ancestorKeyData = ak
+	}
+	// Check if entity key has prefix of ancestor key path
+	entityKeyData, ok := entity["key"].(map[string]any)
+	if !ok {
+		return false
+	}
+	return isAncestor(ancestorKeyData, entityKeyData)
+}
+
+// extractEntityValue extracts a typed value from an entity property.
+func extractEntityValue(entityProp map[string]any) any {
+	if intVal, ok := entityProp["integerValue"].(string); ok {
+		var i int64
+		if _, err := fmt.Sscanf(intVal, "%d", &i); err == nil {
+			return i
+		}
+	} else if strVal, ok := entityProp["stringValue"].(string); ok {
+		return strVal
+	} else if boolVal, ok := entityProp["booleanValue"].(bool); ok {
+		return boolVal
+	} else if floatVal, ok := entityProp["doubleValue"].(float64); ok {
+		return floatVal
+	}
+	return nil
+}
+
+// extractFilterValue extracts a typed value from a filter value.
+func extractFilterValue(filterValue any) any {
+	if fv, ok := filterValue.(map[string]any); ok {
+		if intVal, ok := fv["integerValue"].(string); ok {
+			var i int64
+			if _, err := fmt.Sscanf(intVal, "%d", &i); err == nil {
+				return i
+			}
+		} else if strVal, ok := fv["stringValue"].(string); ok {
+			return strVal
+		}
+	}
+	return nil
+}
+
+// comparePropertyValues compares entity and filter values based on the operator.
+func comparePropertyValues(entityValue, filterVal any, operator string) bool {
+	switch operator {
+	case "EQUAL":
+		return entityValue == filterVal
+	case "GREATER_THAN":
+		if ev, ok := entityValue.(int64); ok {
+			if fv, ok := filterVal.(int64); ok {
+				return ev > fv
+			}
+		}
+	case "GREATER_THAN_OR_EQUAL":
+		if ev, ok := entityValue.(int64); ok {
+			if fv, ok := filterVal.(int64); ok {
+				return ev >= fv
+			}
+		}
+	case "LESS_THAN":
+		if ev, ok := entityValue.(int64); ok {
+			if fv, ok := filterVal.(int64); ok {
+				return ev < fv
+			}
+		}
+	case "LESS_THAN_OR_EQUAL":
+		if ev, ok := entityValue.(int64); ok {
+			if fv, ok := filterVal.(int64); ok {
+				return ev <= fv
+			}
+		}
+	default:
+		return false
+	}
+	return false
+}
+
+// matchesPropertyFilter checks if an entity matches a property filter.
+func matchesPropertyFilter(entity map[string]any, propFilter map[string]any) bool {
+	property, ok := propFilter["property"].(map[string]any)
+	if !ok {
+		return true // Invalid filter, allow all
+	}
+	propertyName, ok := property["name"].(string)
+	if !ok {
+		return true
+	}
+	operator, ok := propFilter["op"].(string)
+	if !ok {
+		return true
+	}
+	filterValue := propFilter["value"]
+
+	// Handle __key__ filters (special property)
+	if propertyName == "__key__" {
+		return matchesKeyFilter(entity, operator, filterValue)
+	}
+
+	// Handle HAS_ANCESTOR
+	if operator == "HAS_ANCESTOR" {
+		return matchesAncestorFilter(entity, filterValue)
+	}
+
+	// Get entity properties
+	properties, ok := entity["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	entityProp, ok := properties[propertyName].(map[string]any)
+	if !ok {
+		return false // Property doesn't exist
+	}
+
+	// Extract entity and filter values
+	entityValue := extractEntityValue(entityProp)
+	filterVal := extractFilterValue(filterValue)
+
+	// Compare based on operator
+	return comparePropertyValues(entityValue, filterVal, operator)
+}
+
 // matchesFilter checks if an entity matches a filter.
-//
-//nolint:gocognit,nestif // Complex logic required for proper filter evaluation with multiple types and operators
 func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 	// Handle propertyFilter
 	if propFilter, ok := filterMap["propertyFilter"].(map[string]any); ok {
-		property, ok := propFilter["property"].(map[string]any)
-		if !ok {
-			return true // Invalid filter, allow all
-		}
-		propertyName, ok := property["name"].(string)
-		if !ok {
-			return true
-		}
-		operator, ok := propFilter["op"].(string)
-		if !ok {
-			return true
-		}
-		filterValue := propFilter["value"]
-
-		// Handle HAS_ANCESTOR
-		if operator == "HAS_ANCESTOR" {
-			ancestorKeyData, ok := filterValue.(map[string]any)
-			if !ok {
-				// Try keyValue if wrapped
-				kv, ok := filterValue.(map[string]any)
-				if !ok {
-					return false
-				}
-				ak, ok := kv["keyValue"].(map[string]any)
-				if !ok {
-					return false
-				}
-				ancestorKeyData = ak
-			}
-			// Check if entity key has prefix of ancestor key path
-			entityKeyData, ok := entity["key"].(map[string]any)
-			if !ok {
-				return false
-			}
-			return isAncestor(ancestorKeyData, entityKeyData)
-		}
-
-		// Get entity properties
-		properties, ok := entity["properties"].(map[string]any)
-		if !ok {
-			return false
-		}
-		entityProp, ok := properties[propertyName].(map[string]any)
-		if !ok {
-			return false // Property doesn't exist
-		}
-
-		// Extract entity value based on type
-		var entityValue any
-		if intVal, ok := entityProp["integerValue"].(string); ok {
-			var i int64
-			if _, err := fmt.Sscanf(intVal, "%d", &i); err == nil {
-				entityValue = i
-			}
-		} else if strVal, ok := entityProp["stringValue"].(string); ok {
-			entityValue = strVal
-		} else if boolVal, ok := entityProp["booleanValue"].(bool); ok {
-			entityValue = boolVal
-		} else if floatVal, ok := entityProp["doubleValue"].(float64); ok {
-			entityValue = floatVal
-		}
-
-		// Extract filter value
-		var filterVal any
-		if fv, ok := filterValue.(map[string]any); ok {
-			if intVal, ok := fv["integerValue"].(string); ok {
-				var i int64
-				if _, err := fmt.Sscanf(intVal, "%d", &i); err == nil {
-					filterVal = i
-				}
-			} else if strVal, ok := fv["stringValue"].(string); ok {
-				filterVal = strVal
-			}
-		}
-
-		// Compare based on operator
-		switch operator {
-		case "EQUAL":
-			return entityValue == filterVal
-		case "GREATER_THAN":
-			if ev, ok := entityValue.(int64); ok {
-				if fv, ok := filterVal.(int64); ok {
-					return ev > fv
-				}
-			}
-		case "GREATER_THAN_OR_EQUAL":
-			if ev, ok := entityValue.(int64); ok {
-				if fv, ok := filterVal.(int64); ok {
-					return ev >= fv
-				}
-			}
-		case "LESS_THAN":
-			if ev, ok := entityValue.(int64); ok {
-				if fv, ok := filterVal.(int64); ok {
-					return ev < fv
-				}
-			}
-		case "LESS_THAN_OR_EQUAL":
-			if ev, ok := entityValue.(int64); ok {
-				if fv, ok := filterVal.(int64); ok {
-					return ev <= fv
-				}
-			}
-		default:
-			return false
-		}
+		return matchesPropertyFilter(entity, propFilter)
 	}
 
 	// Handle compositeFilter (AND/OR)
@@ -1165,6 +1236,108 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 	}
 
 	return true // No filter or unrecognized filter, allow all
+}
+
+// compareKeys compares two Datastore keys and returns:
+// -1 if keyA < keyB
+//
+//	0 if keyA == keyB
+//	1 if keyA > keyB
+func compareKeys(keyA, keyB map[string]any) int {
+	// Extract key strings for comparison
+	strA := keyToSortString(keyA)
+	strB := keyToSortString(keyB)
+
+	if strA < strB {
+		return -1
+	}
+	if strA > strB {
+		return 1
+	}
+	return 0
+}
+
+// keyToSortStringFromEntityValue extracts sort string from entityValue format.
+func keyToSortStringFromEntityValue(entityValue map[string]any) string {
+	props, ok := entityValue["properties"].(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	// Extract kind
+	kindProp, ok := props["Kind"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind, ok := kindProp["stringValue"].(string)
+	if !ok {
+		return ""
+	}
+
+	// Extract namespace
+	namespace := ""
+	if nsProp, ok := props["Namespace"].(map[string]any); ok {
+		if ns, ok := nsProp["stringValue"].(string); ok && ns != "" {
+			namespace = ns
+		}
+	}
+
+	// Extract name or ID
+	if nameProp, ok := props["Name"].(map[string]any); ok {
+		if name, ok := nameProp["stringValue"].(string); ok && name != "" {
+			return namespace + "!" + kind + "/" + name
+		}
+	}
+	if idProp, ok := props["ID"].(map[string]any); ok {
+		if idInt, ok := idProp["integerValue"].(float64); ok && idInt != 0 {
+			return namespace + "!" + kind + "/" + fmt.Sprintf("%.0f", idInt)
+		}
+		if idStr, ok := idProp["stringValue"].(string); ok && idStr != "" {
+			return namespace + "!" + kind + "/" + idStr
+		}
+	}
+	return namespace + "!" + kind + "/"
+}
+
+// keyToSortString converts a key to a string for sorting/comparison.
+// Format: "namespace!kind/name_or_id"
+// Supports both standard key format (with "path") and entityValue format (with "properties").
+func keyToSortString(keyData map[string]any) string {
+	// Try entityValue format first (used by encoded filter values)
+	if entityValue, ok := keyData["entityValue"].(map[string]any); ok {
+		return keyToSortStringFromEntityValue(entityValue)
+	}
+
+	// Try standard path format (used by stored entities)
+	path, ok := keyData["path"].([]any)
+	if !ok || len(path) == 0 {
+		return ""
+	}
+	pathElem, ok := path[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind, ok := pathElem["kind"].(string)
+	if !ok {
+		return ""
+	}
+
+	// Extract namespace
+	namespace := ""
+	if pid, ok := keyData["partitionId"].(map[string]any); ok {
+		if ns, ok := pid["namespaceId"].(string); ok {
+			namespace = ns
+		}
+	}
+
+	// Handle both name and ID keys
+	if name, ok := pathElem["name"].(string); ok {
+		return namespace + "!" + kind + "/" + name
+	}
+	if id, ok := pathElem["id"].(string); ok {
+		return namespace + "!" + kind + "/" + id
+	}
+	return namespace + "!" + kind + "/"
 }
 
 // isAncestor checks if ancestorKey is a prefix of entityKey.

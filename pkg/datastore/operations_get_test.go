@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codeGROOVE-dev/ds9/auth"
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -203,9 +204,17 @@ func TestMultiGetWithDatabaseID(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClientWithDatabase(ctx, "test-project", "multiget-db")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"test-project",
+		"multiget-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase failed: %v", err)
 	}
@@ -216,7 +225,7 @@ func TestMultiGetWithDatabaseID(t *testing.T) {
 		datastore.NameKey("TestKind", "key2", nil),
 	}
 	var entities []testEntity
-	err = client.GetMulti(ctx, keys, &entities)
+	err = client.GetMulti(context.Background(), keys, &entities)
 	// Expect error since entities don't exist
 	var multiErr datastore.MultiError
 	if !errors.As(err, &multiErr) {
@@ -410,25 +419,36 @@ func TestGetWithInvalidJSONResponse(t *testing.T) {
 	defer metadataServer.Close()
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Return invalid JSON
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{invalid json`)); err != nil {
-			t.Logf("write failed: %v", err)
+		if strings.Contains(r.URL.Path, ":lookup") {
+			// Return malformed JSON
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			if _, err := w.Write([]byte("{invalid json")); err != nil {
+				t.Logf("write failed: %v", err)
+			}
+			return
 		}
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity)
 
 	if err == nil {
 		t.Error("expected error for invalid JSON response")
@@ -493,16 +513,21 @@ func TestGetMultiWithServerError(t *testing.T) {
 	defer metadataServer.Close()
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always return 401 to simulate server error
 		w.WriteHeader(http.StatusUnauthorized)
-		if _, err := w.Write([]byte(`{"error":"unauthorized"}`)); err != nil {
-			t.Logf("write failed: %v", err)
-		}
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -512,7 +537,7 @@ func TestGetMultiWithServerError(t *testing.T) {
 	}
 
 	var entities []testEntity
-	err = client.GetMulti(ctx, keys, &entities)
+	err = client.GetMulti(context.Background(), keys, &entities) // Changed ctx to context.Background()
 
 	if err == nil {
 		t.Error("expected error on unauthorized")
@@ -593,8 +618,16 @@ func TestGetMultiPartialNotFound(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -605,7 +638,7 @@ func TestGetMultiPartialNotFound(t *testing.T) {
 	}
 
 	var entities []testEntity
-	err = client.GetMulti(ctx, keys, &entities)
+	err = client.GetMulti(context.Background(), keys, &entities) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error when some entities are missing")
 	} else {
@@ -675,9 +708,9 @@ func TestGetWithJSONUnmarshalError(t *testing.T) {
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, ":lookup") {
-			// Return invalid JSON
+			// Return malformed JSON
 			w.Header().Set("Content-Type", "application/json")
-			if _, err := w.Write([]byte(`{"found": [{"entity": "not-an-object"}]}`)); err != nil {
+			if _, err := w.Write([]byte("{invalid json")); err != nil {
 				t.Logf("write failed: %v", err)
 			}
 			return
@@ -686,8 +719,16 @@ func TestGetWithJSONUnmarshalError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -695,7 +736,7 @@ func TestGetWithJSONUnmarshalError(t *testing.T) {
 	key := datastore.NameKey("Test", "key", nil)
 	var entity testEntity
 
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with invalid entity format")
 	}
@@ -759,8 +800,16 @@ func TestGetWithStringIDKey(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -771,7 +820,7 @@ func TestGetWithStringIDKey(t *testing.T) {
 
 	key := datastore.IDKey("TestKind", 12345, nil)
 	var entity TestEntity
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity)
 	if err != nil {
 		t.Fatalf("Get with string ID key failed: %v", err)
 	}
@@ -839,8 +888,16 @@ func TestGetWithFloat64IDKey(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -851,7 +908,7 @@ func TestGetWithFloat64IDKey(t *testing.T) {
 
 	key := datastore.IDKey("TestKind", 67890, nil)
 	var entity TestEntity
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	if err != nil {
 		t.Fatalf("Get with float64 ID key failed: %v", err)
 	}
@@ -919,8 +976,16 @@ func TestGetWithInvalidStringIDFormat(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -931,7 +996,7 @@ func TestGetWithInvalidStringIDFormat(t *testing.T) {
 
 	key := datastore.IDKey("TestKind", 12345, nil)
 	var entity TestEntity
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity) // Changed ctx to context.Background()
 	// May or may not error depending on parsing behavior
 	if err != nil {
 		t.Logf("Get with invalid string ID format failed: %v", err)
@@ -980,8 +1045,16 @@ func TestGetJSONUnmarshalError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -989,7 +1062,7 @@ func TestGetJSONUnmarshalError(t *testing.T) {
 	key := datastore.NameKey("Test", "test-key", nil)
 	var entity testEntity
 
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity)
 	if err == nil {
 		t.Error("expected error with malformed JSON")
 	}

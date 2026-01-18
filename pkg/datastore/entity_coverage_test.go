@@ -314,10 +314,10 @@ func TestNewClientWithDatabase_Coverage(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	testCtx := TestConfig(ctx, metadataServer.URL, apiServer.URL)
+	opts := TestConfig(ctx, metadataServer.URL, apiServer.URL)
 
 	// Test with empty project (error case)
-	_, err := NewClientWithDatabase(testCtx, "", "test-db")
+	_, err := NewClientWithDatabase(ctx, "", "test-db", opts...)
 	if err == nil {
 		t.Error("Expected error for empty project ID, got nil")
 	}
