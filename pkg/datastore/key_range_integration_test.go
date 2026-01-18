@@ -2,6 +2,7 @@ package datastore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 )
@@ -43,7 +44,7 @@ func TestMock_KeyRangeQuery(t *testing.T) {
 	for {
 		key, err := it.Next(nil)
 		if err != nil {
-			if err == Done {
+			if errors.Is(err, Done) {
 				break
 			}
 			t.Fatalf("Next: %v", err)

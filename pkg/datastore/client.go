@@ -55,8 +55,8 @@ type ClientOption func(*clientOptionsInternal)
 // clientOptionsInternal holds internal client configuration that can be modified by ClientOption.
 type clientOptionsInternal struct {
 	authConfig *auth.Config
-	baseURL    string
 	logger     *slog.Logger
+	baseURL    string
 }
 
 // WithEndpoint returns a ClientOption that sets the API base URL.

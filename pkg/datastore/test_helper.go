@@ -23,6 +23,7 @@ func TestOptions(metadataURL, apiURL string) []ClientOption {
 	}
 }
 
+// TestConfig creates client options for test configuration with the given URLs.
 // Deprecated: TestConfig is deprecated. Use TestOptions instead.
 func TestConfig(_ context.Context, metadataURL, apiURL string) []ClientOption {
 	return TestOptions(metadataURL, apiURL)
