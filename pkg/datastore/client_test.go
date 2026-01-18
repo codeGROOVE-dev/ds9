@@ -59,38 +59,23 @@ func TestNewClientWithDatabase(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.WithConfig(context.Background(), &datastore.Config{
-		APIURL: apiServer.URL,
-		AuthConfig: &auth.Config{
-			MetadataURL: metadataServer.URL,
-			SkipADC:     true,
-		},
-	})
-
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
 	// Test with explicit databaseID
-	client, err := datastore.NewClientWithDatabase(ctx, "test-project", "custom-db")
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"test-project",
+		"custom-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase failed: %v", err)
 	}
 	if client == nil {
 		t.Fatal("expected non-nil client")
-	}
-}
-
-func TestWithConfig(t *testing.T) {
-	// Test that config can be set in context
-	cfg := &datastore.Config{
-		APIURL: "http://test",
-		AuthConfig: &auth.Config{
-			MetadataURL: "http://metadata",
-			SkipADC:     true,
-		},
-	}
-	ctx := datastore.WithConfig(context.Background(), cfg)
-
-	// Context should be non-nil
-	if ctx == nil {
-		t.Fatal("expected non-nil context")
 	}
 }
 
@@ -131,16 +116,18 @@ func TestNewClientWithDatabaseEmptyProjectID(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.WithConfig(context.Background(), &datastore.Config{
-		APIURL: apiServer.URL,
-		AuthConfig: &auth.Config{
-			MetadataURL: metadataServer.URL,
-			SkipADC:     true,
-		},
-	})
-
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
 	// Test with empty projectID - should fetch from metadata
-	client, err := datastore.NewClientWithDatabase(ctx, "", "my-db")
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"",
+		"my-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase with empty projectID failed: %v", err)
 	}
@@ -184,16 +171,18 @@ func TestNewClientWithDatabaseProjectIDFetchFailure(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.WithConfig(context.Background(), &datastore.Config{
-		APIURL: apiServer.URL,
-		AuthConfig: &auth.Config{
-			MetadataURL: metadataServer.URL,
-			SkipADC:     true,
-		},
-	})
-
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
 	// Test with empty projectID and failing metadata server
-	client, err := datastore.NewClientWithDatabase(ctx, "", "my-db")
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"",
+		"my-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err == nil {
 		t.Fatal("expected error when projectID fetch fails, got nil")
 	}

@@ -6,20 +6,24 @@ import (
 	"github.com/codeGROOVE-dev/ds9/auth"
 )
 
-// TestConfig creates a context with test configuration for the given URLs.
+// TestOptions creates client options for test configuration with the given URLs.
 // This is a helper for tests to easily configure mock servers.
-// Use this with context.Background() or any existing context.
 //
 // Example:
 //
-//	ctx := datastore.TestConfig(context.Background(), metadataURL, apiURL)
-//	client, err := datastore.NewClient(ctx, "test-project")
-func TestConfig(ctx context.Context, metadataURL, apiURL string) context.Context {
-	return WithConfig(ctx, &Config{
-		APIURL: apiURL,
-		AuthConfig: &auth.Config{
+//	opts := datastore.TestOptions(metadataURL, apiURL)
+//	client, err := datastore.NewClient(ctx, "test-project", opts...)
+func TestOptions(metadataURL, apiURL string) []ClientOption {
+	return []ClientOption{
+		WithEndpoint(apiURL),
+		WithAuth(&auth.Config{
 			MetadataURL: metadataURL,
 			SkipADC:     true,
-		},
-	})
+		}),
+	}
+}
+
+// Deprecated: TestConfig is deprecated. Use TestOptions instead.
+func TestConfig(_ context.Context, metadataURL, apiURL string) []ClientOption {
+	return TestOptions(metadataURL, apiURL)
 }

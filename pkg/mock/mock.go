@@ -1035,6 +1035,45 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 		}
 		filterValue := propFilter["value"]
 
+		// Handle __key__ filters (special property)
+		if propertyName == "__key__" {
+			entityKeyData, ok := entity["key"].(map[string]any)
+			if !ok {
+				return false
+			}
+
+			// Extract the filter key - it might be wrapped in keyValue
+			var filterKeyData map[string]any
+			if fkd, ok := filterValue.(map[string]any); ok {
+				// Check if it's wrapped in keyValue
+				if kv, hasKeyValue := fkd["keyValue"].(map[string]any); hasKeyValue {
+					filterKeyData = kv
+				} else {
+					// It's a direct key
+					filterKeyData = fkd
+				}
+			} else {
+				return false
+			}
+
+			// Compare keys based on operator
+			cmpResult := compareKeys(entityKeyData, filterKeyData)
+			switch operator {
+			case "EQUAL":
+				return cmpResult == 0
+			case "GREATER_THAN":
+				return cmpResult > 0
+			case "GREATER_THAN_OR_EQUAL":
+				return cmpResult >= 0
+			case "LESS_THAN":
+				return cmpResult < 0
+			case "LESS_THAN_OR_EQUAL":
+				return cmpResult <= 0
+			default:
+				return false
+			}
+		}
+
 		// Handle HAS_ANCESTOR
 		if operator == "HAS_ANCESTOR" {
 			ancestorKeyData, ok := filterValue.(map[string]any)
@@ -1165,6 +1204,100 @@ func matchesFilter(entity map[string]any, filterMap map[string]any) bool {
 	}
 
 	return true // No filter or unrecognized filter, allow all
+}
+
+// compareKeys compares two Datastore keys and returns:
+// -1 if keyA < keyB
+//
+//	0 if keyA == keyB
+//	1 if keyA > keyB
+func compareKeys(keyA, keyB map[string]any) int {
+	// Extract key strings for comparison
+	strA := keyToSortString(keyA)
+	strB := keyToSortString(keyB)
+
+	if strA < strB {
+		return -1
+	}
+	if strA > strB {
+		return 1
+	}
+	return 0
+}
+
+// keyToSortString converts a key to a string for sorting/comparison.
+// Format: "namespace!kind/name_or_id"
+// Supports both standard key format (with "path") and entityValue format (with "properties").
+func keyToSortString(keyData map[string]any) string {
+	// Try entityValue format first (used by encoded filter values)
+	if entityValue, ok := keyData["entityValue"].(map[string]any); ok {
+		if props, ok := entityValue["properties"].(map[string]any); ok {
+			// Extract kind
+			kindProp, ok := props["Kind"].(map[string]any)
+			if !ok {
+				return ""
+			}
+			kind, ok := kindProp["stringValue"].(string)
+			if !ok {
+				return ""
+			}
+
+			// Extract namespace
+			namespace := ""
+			if nsProp, ok := props["Namespace"].(map[string]any); ok {
+				if ns, ok := nsProp["stringValue"].(string); ok && ns != "" {
+					namespace = ns
+				}
+			}
+
+			// Extract name or ID
+			if nameProp, ok := props["Name"].(map[string]any); ok {
+				if name, ok := nameProp["stringValue"].(string); ok && name != "" {
+					return namespace + "!" + kind + "/" + name
+				}
+			}
+			if idProp, ok := props["ID"].(map[string]any); ok {
+				if idInt, ok := idProp["integerValue"].(float64); ok && idInt != 0 {
+					return namespace + "!" + kind + "/" + fmt.Sprintf("%.0f", idInt)
+				}
+				if idStr, ok := idProp["stringValue"].(string); ok && idStr != "" {
+					return namespace + "!" + kind + "/" + idStr
+				}
+			}
+			return namespace + "!" + kind + "/"
+		}
+	}
+
+	// Try standard path format (used by stored entities)
+	path, ok := keyData["path"].([]any)
+	if !ok || len(path) == 0 {
+		return ""
+	}
+	pathElem, ok := path[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	kind, ok := pathElem["kind"].(string)
+	if !ok {
+		return ""
+	}
+
+	// Extract namespace
+	namespace := ""
+	if pid, ok := keyData["partitionId"].(map[string]any); ok {
+		if ns, ok := pid["namespaceId"].(string); ok {
+			namespace = ns
+		}
+	}
+
+	// Handle both name and ID keys
+	if name, ok := pathElem["name"].(string); ok {
+		return namespace + "!" + kind + "/" + name
+	}
+	if id, ok := pathElem["id"].(string); ok {
+		return namespace + "!" + kind + "/" + id
+	}
+	return namespace + "!" + kind + "/"
 }
 
 // isAncestor checks if ancestorKey is a prefix of entityKey.

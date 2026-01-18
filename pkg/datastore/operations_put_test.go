@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/ds9/auth"
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -408,9 +409,16 @@ func TestPutMultiWithServerError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -425,7 +433,7 @@ func TestPutMultiWithServerError(t *testing.T) {
 		{Name: "entity2", Count: 2},
 	}
 
-	_, err = client.PutMulti(ctx, keys, entities)
+	_, err = client.PutMulti(context.Background(), keys, entities) // Changed ctx to context.Background()
 
 	if err == nil {
 		t.Error("expected error on server failure")
@@ -504,16 +512,23 @@ func TestPutWithAccessTokenError(t *testing.T) {
 	}))
 	defer metadataServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, "http://unused")
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithAuth(authConfig),
+		// No WithEndpoint needed as the error happens before API call
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 	key := datastore.NameKey("Test", "key", nil)
 	entity := &testEntity{Name: "test"}
 
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error when access token fails")
 	}
@@ -557,8 +572,16 @@ func TestPutMultiRequestMarshalError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -572,7 +595,7 @@ func TestPutMultiRequestMarshalError(t *testing.T) {
 		{Name: "test1", Count: 123},
 	}
 
-	_, err = client.PutMulti(ctx, keys, entities)
+	_, err = client.PutMulti(context.Background(), keys, entities) // Changed ctx to context.Background()
 	if err != nil {
 		t.Logf("PutMulti completed with: %v", err)
 	}

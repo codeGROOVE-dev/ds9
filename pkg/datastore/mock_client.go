@@ -17,18 +17,17 @@ func NewMockClient(t *testing.T) (client *Client, cleanup func()) {
 	// Create mock servers
 	metadataURL, apiURL, cleanup := mock.NewMockServers(t)
 
-	// Create context with test configuration
-	ctx := WithConfig(context.Background(), &Config{
-		APIURL: apiURL,
-		AuthConfig: &auth.Config{
+	// Create client with mock endpoints
+	var err error
+	client, err = NewClient(
+		context.Background(),
+		"test-project",
+		WithEndpoint(apiURL),
+		WithAuth(&auth.Config{
 			MetadataURL: metadataURL,
 			SkipADC:     true,
-		},
-	})
-
-	// Create client
-	var err error
-	client, err = NewClient(ctx, "test-project")
+		}),
+	)
 	if err != nil {
 		t.Fatalf("failed to create mock client: %v", err)
 	}

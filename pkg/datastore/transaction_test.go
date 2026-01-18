@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/ds9/auth"
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -257,12 +258,22 @@ func TestTransactionWithDatabaseID(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClientWithDatabase(ctx, "test-project", "tx-db")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"test-project",
+		"tx-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase failed: %v", err)
 	}
+
+	ctx := context.Background()
 
 	// Run transaction with databaseID
 	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
@@ -355,14 +366,21 @@ func TestTransactionBeginFailure(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		return nil
 	})
 
@@ -371,7 +389,7 @@ func TestTransactionBeginFailure(t *testing.T) {
 	}
 
 	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("expected error to mention 500 status, got: %v", err)
+		t.Errorf("expected 500 error, got: %v", err)
 	}
 }
 
@@ -452,16 +470,23 @@ func TestTransactionCommitAbortedRetry(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	// This should succeed after retries
 	key := datastore.NameKey("TestKind", "tx-retry", nil)
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error { // Changed ctx to context.Background()
 		_, err := tx.Put(key, &testEntity{Name: "test", Count: 1})
 		return err
 	})
@@ -540,16 +565,23 @@ func TestTransactionMaxRetriesExceeded(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	// This should fail after max retries
 	key := datastore.NameKey("TestKind", "tx-max-retry", nil)
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		_, err := tx.Put(key, &testEntity{Name: "test", Count: 1})
 		return err
 	})
@@ -717,15 +749,22 @@ func TestTransactionGetWithInvalidResponse(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -801,15 +840,22 @@ func TestTransactionWithNonRetriableError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		_, err := tx.Put(key, &testEntity{Name: "test", Count: 1})
 		return err
 	})
@@ -865,14 +911,21 @@ func TestTransactionWithInvalidTxResponse(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		return nil
 	})
 
@@ -965,15 +1018,22 @@ func TestTransactionGetWithDecodeError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})
@@ -1043,15 +1103,22 @@ func TestTransactionGetMissingEntity(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 	key := datastore.NameKey("Test", "nonexistent", nil)
 
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		var entity testEntity
 		err := tx.Get(key, &entity)
 		if err == nil {
@@ -1128,9 +1195,10 @@ func TestTransactionGetDecodeError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	opts := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	ctx := context.Background()
 
-	client, err := datastore.NewClient(ctx, "test-project")
+	client, err := datastore.NewClient(ctx, "test-project", opts...)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -1200,9 +1268,10 @@ func TestTransactionCommitInvalidResponse(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	opts := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	ctx := context.Background()
 
-	client, err := datastore.NewClient(ctx, "test-project")
+	client, err := datastore.NewClient(ctx, "test-project", opts...)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -1267,9 +1336,10 @@ func TestTransactionCommitUnmarshalError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	opts := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	ctx := context.Background()
 
-	client, err := datastore.NewClient(ctx, "test-project")
+	client, err := datastore.NewClient(ctx, "test-project", opts...)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -1347,9 +1417,10 @@ func TestTransactionGetNotFound(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	opts := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
+	ctx := context.Background()
 
-	client, err := datastore.NewClient(ctx, "test-project")
+	client, err := datastore.NewClient(ctx, "test-project", opts...)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -1404,15 +1475,22 @@ func TestTransactionGetAccessTokenError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 	key := datastore.NameKey("Test", "test-key", nil)
 
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		var entity testEntity
 		err := tx.Get(key, &entity)
 		if err == nil {
@@ -1484,15 +1562,22 @@ func TestTransactionGetNonOKStatus(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 	key := datastore.NameKey("Test", "test-key", nil)
 
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	_, err = client.RunInTransaction(context.Background(), func(tx *datastore.Transaction) error {
 		var entity testEntity
 		return tx.Get(key, &entity)
 	})

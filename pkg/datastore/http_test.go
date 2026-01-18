@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/ds9/auth"
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -65,9 +66,16 @@ func TestDoRequestRetryOn5xxError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -75,7 +83,7 @@ func TestDoRequestRetryOn5xxError(t *testing.T) {
 	// This should succeed after retries
 	key := datastore.NameKey("TestKind", "retry-test", nil)
 	entity := &testEntity{Name: "test", Count: 1}
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity)
 	if err != nil {
 		t.Fatalf("Put should succeed after retries, got: %v", err)
 	}
@@ -124,9 +132,16 @@ func TestDoRequestFailsOn4xxError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
@@ -134,7 +149,7 @@ func TestDoRequestFailsOn4xxError(t *testing.T) {
 	// This should fail immediately without retry on 4xx
 	key := datastore.NameKey("TestKind", "bad-request", nil)
 	entity := &testEntity{Name: "test", Count: 1}
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity)
 	if err == nil {
 		t.Fatal("expected error on 4xx response")
 	}
@@ -187,13 +202,22 @@ func TestDoRequestContextCancellation(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	// Create context that we'll cancel
+	var ctx context.Context // Declare ctx here
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Cancel after a short delay
@@ -254,16 +278,23 @@ func TestGetWithHTTPError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("TestKind", "test", nil)
 	var entity testEntity
-	err = client.Get(ctx, key, &entity)
+	err = client.Get(context.Background(), key, &entity)
 
 	if err == nil {
 		t.Fatal("expected error on 404")
@@ -302,24 +333,27 @@ func TestPutWithHTTPError(t *testing.T) {
 	defer metadataServer.Close()
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Return 403 Forbidden
 		w.WriteHeader(http.StatusForbidden)
-		if _, err := w.Write([]byte(`{"error":"permission denied"}`)); err != nil {
-			t.Logf("write failed: %v", err)
-		}
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("TestKind", "test", nil)
 	entity := &testEntity{Name: "test", Count: 1}
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity)
 
 	if err == nil {
 		t.Fatal("expected error on 403")
@@ -368,16 +402,23 @@ func TestDoRequestAllRetriesFail(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("TestKind", "test", nil)
 	entity := &testEntity{Name: "test", Count: 1}
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity)
 
 	if err == nil {
 		t.Fatal("expected error after all retries")
@@ -429,16 +470,23 @@ func TestDoRequestUnexpectedSuccess(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
 	entity := &testEntity{Name: "test", Count: 1}
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity)
 
 	if err == nil {
 		t.Error("expected error for unexpected 2xx status")
@@ -484,16 +532,23 @@ func TestDoRequestWithReadBodyError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	key := datastore.NameKey("Test", "key", nil)
 	entity := &testEntity{Name: "test", Count: 1}
-	_, err = client.Put(ctx, key, entity)
+	_, err = client.Put(context.Background(), key, entity)
 	// Should get an error related to response parsing
 	if err != nil {
 		t.Logf("Got expected error with incomplete response: %v", err)

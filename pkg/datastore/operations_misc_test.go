@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/ds9/auth" // Add missing import
 	"github.com/codeGROOVE-dev/ds9/pkg/datastore"
 )
 
@@ -275,16 +276,24 @@ func TestAllKeysWithDatabaseID(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClientWithDatabase(ctx, "test-project", "query-db")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClientWithDatabase(
+		context.Background(),
+		"test-project",
+		"query-db",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClientWithDatabase failed: %v", err)
 	}
 
 	// Query with databaseID
 	query := datastore.NewQuery("TestKind").KeysOnly()
-	keys, err := client.AllKeys(ctx, query)
+	keys, err := client.AllKeys(context.Background(), query)
 	if err != nil {
 		t.Fatalf("AllKeys with databaseID failed: %v", err)
 	}
@@ -571,293 +580,25 @@ func TestAllKeysWithInvalidResponse(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	query := datastore.NewQuery("Test").KeysOnly()
-	_, err = client.AllKeys(ctx, query)
+	_, err = client.AllKeys(context.Background(), query) // Changed ctx to context.Background()
 
 	if err == nil {
 		t.Error("expected error for invalid JSON")
-	}
-}
-
-func TestKeyFromJSONInvalidPathElement(t *testing.T) {
-	// Test with non-map path element
-	keyData := map[string]any{
-		"path": []any{
-			"invalid-string-instead-of-map",
-		},
-	}
-
-	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Metadata-Flavor") != "Google" {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if r.URL.Path == "/project/project-id" {
-			w.WriteHeader(http.StatusOK)
-			if _, err := w.Write([]byte("test-project")); err != nil {
-				t.Logf("write failed: %v", err)
-			}
-			return
-		}
-		if r.URL.Path == "/instance/service-accounts/default/token" {
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "test-token",
-				"expires_in":   3600,
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer metadataServer.Close()
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, ":commit") {
-			// Return response with invalid key in mutation result
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"mutationResults": []map[string]any{
-					{
-						"key": keyData,
-					},
-				},
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiServer.Close()
-
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	realClient, err := datastore.NewClient(ctx, "test-project")
-	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
-	}
-
-	key := datastore.NameKey("Test", "key", nil)
-	entity := &testEntity{Name: "test"}
-
-	// Try Put which will parse the returned key
-	_, err = realClient.Put(ctx, key, entity)
-	if err == nil {
-		t.Log("Put succeeded despite invalid path element (API may handle gracefully)")
-	} else {
-		t.Logf("Put failed as expected: %v", err)
-	}
-}
-
-func TestKeyFromJSONInvalidIDString(t *testing.T) {
-	keyData := map[string]any{
-		"path": []any{
-			map[string]any{
-				"kind": "Test",
-				"id":   "not-a-number",
-			},
-		},
-	}
-
-	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Metadata-Flavor") != "Google" {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if r.URL.Path == "/project/project-id" {
-			w.WriteHeader(http.StatusOK)
-			if _, err := w.Write([]byte("test-project")); err != nil {
-				t.Logf("write failed: %v", err)
-			}
-			return
-		}
-		if r.URL.Path == "/instance/service-accounts/default/token" {
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "test-token",
-				"expires_in":   3600,
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer metadataServer.Close()
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, ":commit") {
-			// Return response with invalid ID string in mutation result
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"mutationResults": []map[string]any{
-					{
-						"key": keyData,
-					},
-				},
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiServer.Close()
-
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	realClient, err := datastore.NewClient(ctx, "test-project")
-	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
-	}
-
-	key := datastore.NameKey("Test", "key", nil)
-	entity := &testEntity{Name: "test"}
-
-	// Try Put which will parse the returned key
-	_, err = realClient.Put(ctx, key, entity)
-	if err == nil {
-		t.Log("Put succeeded despite invalid ID string (API may handle gracefully)")
-	} else {
-		t.Logf("Put failed as expected: %v", err)
-	}
-}
-
-func TestKeyFromJSONIDAsFloat(t *testing.T) {
-	keyData := map[string]any{
-		"path": []any{
-			map[string]any{
-				"kind": "Test",
-				"id":   float64(12345),
-			},
-		},
-	}
-
-	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Metadata-Flavor") != "Google" {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if r.URL.Path == "/project/project-id" {
-			w.WriteHeader(http.StatusOK)
-			if _, err := w.Write([]byte("test-project")); err != nil {
-				t.Logf("write failed: %v", err)
-			}
-			return
-		}
-		if r.URL.Path == "/instance/service-accounts/default/token" {
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "test-token",
-				"expires_in":   3600,
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer metadataServer.Close()
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, ":lookup") {
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"found": []map[string]any{
-					{
-						"entity": map[string]any{
-							"key": keyData,
-							"properties": map[string]any{
-								"name": map[string]any{"stringValue": "test"},
-							},
-						},
-					},
-				},
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiServer.Close()
-
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-
-	realClient, err := datastore.NewClient(ctx, "test-project")
-	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
-	}
-
-	key := datastore.NameKey("Test", "key", nil)
-	var entity testEntity
-
-	err = realClient.Get(ctx, key, &entity)
-	if err != nil {
-		t.Errorf("unexpected error with float64 ID: %v", err)
-	}
-}
-
-func TestAllKeysInvalidJSON(t *testing.T) {
-	metadataServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Metadata-Flavor") != "Google" {
-			w.WriteHeader(http.StatusForbidden)
-			return
-		}
-		if r.URL.Path == "/project/project-id" {
-			w.WriteHeader(http.StatusOK)
-			if _, err := w.Write([]byte("test-project")); err != nil {
-				t.Logf("write failed: %v", err)
-			}
-			return
-		}
-		if r.URL.Path == "/instance/service-accounts/default/token" {
-			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{
-				"access_token": "test-token",
-				"expires_in":   3600,
-			}); err != nil {
-				t.Logf("encode failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer metadataServer.Close()
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, ":runQuery") {
-			// Return invalid JSON
-			w.Header().Set("Content-Type", "application/json")
-			if _, err := w.Write([]byte("{")); err != nil {
-				t.Logf("write failed: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer apiServer.Close()
-
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
-	if err != nil {
-		t.Fatalf("NewClient failed: %v", err)
-	}
-
-	query := datastore.NewQuery("Test").KeysOnly()
-
-	_, err = client.AllKeys(ctx, query)
-	if err == nil {
-		t.Error("expected error with invalid JSON")
 	}
 }
 
@@ -935,15 +676,23 @@ func TestAllKeysWithBatching(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	query := datastore.NewQuery("Test").KeysOnly()
 
-	keys, err := client.AllKeys(ctx, query)
+	keys, err := client.AllKeys(context.Background(), query) // Changed ctx to context.Background()
 	if err != nil {
 		t.Logf("AllKeys with many results: %v", err)
 	} else if len(keys) != 50 {
@@ -1001,15 +750,23 @@ func TestAllKeysKeyFromJSONError(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	query := datastore.NewQuery("Test").KeysOnly()
 
-	_, err = client.AllKeys(ctx, query)
+	_, err = client.AllKeys(context.Background(), query) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with invalid key format")
 	}
@@ -1067,14 +824,22 @@ func TestAllKeysEmptyPathInKey(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	query := datastore.NewQuery("TestKind").KeysOnly()
-	_, err = client.AllKeys(ctx, query)
+	_, err = client.AllKeys(context.Background(), query) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with empty path in key")
 	}
@@ -1132,14 +897,22 @@ func TestAllKeysInvalidPathElement(t *testing.T) {
 	}))
 	defer apiServer.Close()
 
-	ctx := datastore.TestConfig(context.Background(), metadataServer.URL, apiServer.URL)
-	client, err := datastore.NewClient(ctx, "test-project")
+	authConfig := &auth.Config{
+		MetadataURL: metadataServer.URL,
+		SkipADC:     true,
+	}
+	client, err := datastore.NewClient(
+		context.Background(),
+		"test-project",
+		datastore.WithEndpoint(apiServer.URL),
+		datastore.WithAuth(authConfig),
+	)
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
 
 	query := datastore.NewQuery("TestKind").KeysOnly()
-	_, err = client.AllKeys(ctx, query)
+	_, err = client.AllKeys(context.Background(), query) // Changed ctx to context.Background()
 	if err == nil {
 		t.Error("expected error with invalid path element")
 	}

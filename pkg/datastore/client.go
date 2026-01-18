@@ -49,36 +49,34 @@ var (
 	}
 )
 
-// Config holds datastore client configuration.
-type Config struct {
-	// AuthConfig is passed to the auth package for authentication.
-	// Can be nil to use defaults.
-	AuthConfig *auth.Config
+// ClientOption is an option for a Datastore client.
+type ClientOption func(*clientOptionsInternal)
 
-	// APIURL is the base URL for the Datastore API.
-	// Defaults to production if empty.
-	APIURL string
+// clientOptionsInternal holds internal client configuration that can be modified by ClientOption.
+type clientOptionsInternal struct {
+	authConfig *auth.Config
+	baseURL    string
+	logger     *slog.Logger
 }
 
-// configKey is the key for storing Config in context.
-type configKey struct{}
-
-// WithConfig returns a new context with the given datastore config.
-// This also sets the auth config if provided.
-func WithConfig(ctx context.Context, cfg *Config) context.Context {
-	if cfg.AuthConfig != nil {
-		ctx = auth.WithConfig(ctx, cfg.AuthConfig)
+// WithEndpoint returns a ClientOption that sets the API base URL.
+func WithEndpoint(url string) ClientOption {
+	return func(o *clientOptionsInternal) {
+		o.baseURL = url
 	}
-	return context.WithValue(ctx, configKey{}, cfg)
 }
 
-// getConfig retrieves the datastore config from context, or returns defaults.
-func getConfig(ctx context.Context) *Config {
-	if cfg, ok := ctx.Value(configKey{}).(*Config); ok && cfg != nil {
-		return cfg
+// WithLogger returns a ClientOption that sets the logger.
+func WithLogger(logger *slog.Logger) ClientOption {
+	return func(o *clientOptionsInternal) {
+		o.logger = logger
 	}
-	return &Config{
-		APIURL: defaultAPIURL,
+}
+
+// WithAuth returns a ClientOption that sets the authentication configuration.
+func WithAuth(cfg *auth.Config) ClientOption {
+	return func(o *clientOptionsInternal) {
+		o.authConfig = cfg
 	}
 }
 
@@ -93,37 +91,52 @@ type Client struct {
 
 // NewClient creates a new Datastore client.
 // If projectID is empty, it will be fetched from the GCP metadata server.
-// Configuration can be provided via WithConfig in the context.
-func NewClient(ctx context.Context, projectID string) (*Client, error) {
-	return NewClientWithDatabase(ctx, projectID, "")
+// Options can be provided to configure the client.
+func NewClient(ctx context.Context, projectID string, opts ...ClientOption) (*Client, error) {
+	return NewClientWithDatabase(ctx, projectID, "", opts...)
 }
 
 // NewClientWithDatabase creates a new Datastore client with a specific database.
-// Configuration can be provided via WithConfig in the context.
-func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, error) {
-	logger := slog.Default()
-	cfg := getConfig(ctx)
+// Options can be provided to configure the client.
+func NewClientWithDatabase(ctx context.Context, projID, dbID string, opts ...ClientOption) (*Client, error) {
+	// Apply default internal options
+	options := &clientOptionsInternal{
+		baseURL: defaultAPIURL,
+		logger:  slog.Default(),
+	}
 
+	// Apply provided options
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	// --- Existing NewClientWithDatabase logic starts here ---
 	if projID == "" {
-		if !testing.Testing() {
-			logger.InfoContext(ctx, "project ID not provided, fetching from metadata server")
+		// Inject auth config into context before fetching project ID
+		fetchCtx := ctx
+		if options.authConfig != nil {
+			fetchCtx = auth.WithConfig(ctx, options.authConfig)
 		}
-		pid, err := auth.ProjectID(ctx)
+
+		if !testing.Testing() {
+			options.logger.InfoContext(ctx, "project ID not provided, fetching from metadata server")
+		}
+		pid, err := auth.ProjectID(fetchCtx)
 		if err != nil {
-			logger.ErrorContext(ctx, "failed to get project ID from metadata server", "error", err)
+			options.logger.ErrorContext(ctx, "failed to get project ID from metadata server", "error", err)
 			return nil, fmt.Errorf("project ID required: %w", err)
 		}
 		projID = pid
 		if !testing.Testing() {
-			logger.InfoContext(ctx, "fetched project ID from metadata server", "project_id", projID)
+			options.logger.InfoContext(ctx, "fetched project ID from metadata server", "project_id", projID)
 		}
 	}
 
 	if !testing.Testing() {
-		logger.InfoContext(ctx, "creating datastore client", "project_id", projID, "database_id", dbID)
+		options.logger.InfoContext(ctx, "creating datastore client", "project_id", projID, "database_id", dbID)
 	}
 
-	baseURL := cfg.APIURL
+	baseURL := options.baseURL
 	if baseURL == "" {
 		baseURL = defaultAPIURL
 	}
@@ -132,8 +145,8 @@ func NewClientWithDatabase(ctx context.Context, projID, dbID string) (*Client, e
 		projectID:  projID,
 		databaseID: dbID,
 		baseURL:    baseURL,
-		authConfig: cfg.AuthConfig,
-		logger:     logger,
+		authConfig: options.authConfig, // Use authConfig from options
+		logger:     options.logger,     // Use logger from options
 	}, nil
 }
 
